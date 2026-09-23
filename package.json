@@ -1,0 +1,10 @@
+{
+  "name": "researchly",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter \"@researchly/*\" build && pnpm --filter web build",
+    "test": "pnpm --filter web test run",
+    "lint": "pnpm --filter web lint"
+  }
+}
