@@ -1,5 +1,4 @@
 import os
-import pytest
 
 # Ensure tests run with empty credentials so dev bypass is triggered
 os.environ["SUPABASE_URL"] = ""
