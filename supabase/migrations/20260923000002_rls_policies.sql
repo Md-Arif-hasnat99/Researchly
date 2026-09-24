@@ -1,6 +1,7 @@
 -- ============================================================
 -- Researchly - Row Level Security Policies
 -- Part 1: RLS Enforcement
+-- Idempotent: safe to run multiple times
 -- ============================================================
 
 -- ============================================================
@@ -18,10 +19,12 @@ alter table public.citations     enable row level security;
 -- profiles
 -- ============================================================
 
+drop policy if exists "profiles: owner select" on public.profiles;
 create policy "profiles: owner select"
     on public.profiles for select
     using (auth.uid() = id);
 
+drop policy if exists "profiles: owner update" on public.profiles;
 create policy "profiles: owner update"
     on public.profiles for update
     using (auth.uid() = id);
@@ -30,18 +33,22 @@ create policy "profiles: owner update"
 -- papers
 -- ============================================================
 
+drop policy if exists "papers: owner select" on public.papers;
 create policy "papers: owner select"
     on public.papers for select
     using (auth.uid() = user_id);
 
+drop policy if exists "papers: owner insert" on public.papers;
 create policy "papers: owner insert"
     on public.papers for insert
     with check (auth.uid() = user_id);
 
+drop policy if exists "papers: owner update" on public.papers;
 create policy "papers: owner update"
     on public.papers for update
     using (auth.uid() = user_id);
 
+drop policy if exists "papers: owner delete" on public.papers;
 create policy "papers: owner delete"
     on public.papers for delete
     using (auth.uid() = user_id);
@@ -51,6 +58,7 @@ create policy "papers: owner delete"
 --    Access is inherited through ownership of the parent paper
 -- ============================================================
 
+drop policy if exists "paper_chunks: owner select" on public.paper_chunks;
 create policy "paper_chunks: owner select"
     on public.paper_chunks for select
     using (
@@ -61,6 +69,7 @@ create policy "paper_chunks: owner select"
         )
     );
 
+drop policy if exists "paper_chunks: owner insert" on public.paper_chunks;
 create policy "paper_chunks: owner insert"
     on public.paper_chunks for insert
     with check (
@@ -71,6 +80,7 @@ create policy "paper_chunks: owner insert"
         )
     );
 
+drop policy if exists "paper_chunks: owner delete" on public.paper_chunks;
 create policy "paper_chunks: owner delete"
     on public.paper_chunks for delete
     using (
@@ -85,18 +95,22 @@ create policy "paper_chunks: owner delete"
 -- conversations
 -- ============================================================
 
+drop policy if exists "conversations: owner select" on public.conversations;
 create policy "conversations: owner select"
     on public.conversations for select
     using (auth.uid() = user_id);
 
+drop policy if exists "conversations: owner insert" on public.conversations;
 create policy "conversations: owner insert"
     on public.conversations for insert
     with check (auth.uid() = user_id);
 
+drop policy if exists "conversations: owner update" on public.conversations;
 create policy "conversations: owner update"
     on public.conversations for update
     using (auth.uid() = user_id);
 
+drop policy if exists "conversations: owner delete" on public.conversations;
 create policy "conversations: owner delete"
     on public.conversations for delete
     using (auth.uid() = user_id);
@@ -106,6 +120,7 @@ create policy "conversations: owner delete"
 --    Access via parent conversation ownership
 -- ============================================================
 
+drop policy if exists "messages: owner select" on public.messages;
 create policy "messages: owner select"
     on public.messages for select
     using (
@@ -116,6 +131,7 @@ create policy "messages: owner select"
         )
     );
 
+drop policy if exists "messages: owner insert" on public.messages;
 create policy "messages: owner insert"
     on public.messages for insert
     with check (
@@ -126,6 +142,7 @@ create policy "messages: owner insert"
         )
     );
 
+drop policy if exists "messages: owner delete" on public.messages;
 create policy "messages: owner delete"
     on public.messages for delete
     using (
@@ -141,6 +158,7 @@ create policy "messages: owner delete"
 --    Access via parent message → conversation → user chain
 -- ============================================================
 
+drop policy if exists "citations: owner select" on public.citations;
 create policy "citations: owner select"
     on public.citations for select
     using (
@@ -153,6 +171,7 @@ create policy "citations: owner select"
         )
     );
 
+drop policy if exists "citations: owner insert" on public.citations;
 create policy "citations: owner insert"
     on public.citations for insert
     with check (
@@ -165,6 +184,7 @@ create policy "citations: owner insert"
         )
     );
 
+drop policy if exists "citations: owner delete" on public.citations;
 create policy "citations: owner delete"
     on public.citations for delete
     using (

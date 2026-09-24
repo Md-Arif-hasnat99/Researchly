@@ -13,6 +13,7 @@ Status transitions::
 import logging
 
 from app.core.supabase import get_supabase_client
+from app.rag.embeddings.gemini import embed_texts
 from app.rag.ingestion.chunker import chunk_pages
 from app.rag.ingestion.extractor import extract_pages
 
@@ -87,7 +88,16 @@ def run_ingestion(paper_id: str, pdf_bytes: bytes) -> int:
         ).execute()
         logger.debug("Cleared existing chunks for paper %s", paper_id)
 
-        # 4. Persist new chunks (embedding column left NULL; filled in Part 5)
+        # 4. Generate embeddings for all chunks
+        texts_to_embed = [chunk.content for chunk in chunks]
+        embeddings = []
+        try:
+            embeddings = embed_texts(texts_to_embed)
+        except Exception as exc:
+            logger.error("Failed to generate embeddings for paper %s: %s", paper_id, exc)
+            raise RuntimeError(f"Embedding generation failed: {exc}") from exc
+
+        # 5. Persist new chunks with their embeddings
         chunks_payload = [
             {
                 "paper_id": chunk.paper_id,
@@ -95,8 +105,9 @@ def run_ingestion(paper_id: str, pdf_bytes: bytes) -> int:
                 "page_number": chunk.page_number,
                 "section": chunk.section,
                 "chunk_index": chunk.chunk_index,
+                "embedding": embedding,
             }
-            for chunk in chunks
+            for chunk, embedding in zip(chunks, embeddings)
         ]
         _insert_chunks_batch(chunks_payload)
 

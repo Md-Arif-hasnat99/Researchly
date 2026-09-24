@@ -119,9 +119,11 @@ class TestPipeline:
         mock.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[])
         return mock
 
+    @patch("app.rag.ingestion.pipeline.embed_texts")
     @patch("app.rag.ingestion.pipeline.get_supabase_client")
-    def test_successful_ingestion_returns_chunk_count(self, mock_client):
+    def test_successful_ingestion_returns_chunk_count(self, mock_client, mock_embed_texts):
         mock_client.return_value = self._mock_supabase()
+        mock_embed_texts.side_effect = lambda texts: [[0.1] * 768 for _ in texts]
         from app.rag.ingestion.pipeline import run_ingestion
 
         result = run_ingestion("paper-id-1", _MINIMAL_PDF)
@@ -143,10 +145,12 @@ class TestPipeline:
         statuses = [c.args[0]["status"] for c in update_calls if "status" in c.args[0]]
         assert "failed" in statuses
 
+    @patch("app.rag.ingestion.pipeline.embed_texts")
     @patch("app.rag.ingestion.pipeline.get_supabase_client")
-    def test_status_transitions_processing_then_ready(self, mock_client):
+    def test_status_transitions_processing_then_ready(self, mock_client, mock_embed_texts):
         client = self._mock_supabase()
         mock_client.return_value = client
+        mock_embed_texts.side_effect = lambda texts: [[0.1] * 768 for _ in texts]
         from app.rag.ingestion.pipeline import run_ingestion
 
         run_ingestion("paper-id-3", _MINIMAL_PDF)
