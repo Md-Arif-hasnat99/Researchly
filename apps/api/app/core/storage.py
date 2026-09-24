@@ -45,3 +45,27 @@ def delete_paper_from_storage(storage_path: str) -> None:
         logger.info("Deleted paper from storage: %s", storage_path)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not delete storage object %s: %s", storage_path, exc)
+
+
+def download_paper(storage_path: str) -> bytes:
+    """Download a paper PDF from Supabase Storage and return its bytes.
+
+    Args:
+        storage_path: Path within the ``papers`` bucket.
+
+    Returns:
+        Raw PDF bytes.
+
+    Raises:
+        RuntimeError: If the download fails.
+    """
+    client = get_supabase_client()
+    try:
+        data: bytes = client.storage.from_(BUCKET).download(storage_path)
+        logger.info("Downloaded paper from storage: %s (%d bytes)", storage_path, len(data))
+        return data
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to download paper from storage ({storage_path}): {exc}"
+        ) from exc
+
