@@ -1,8 +1,8 @@
-"""Papers API router — upload, list, retrieve, delete."""
+"""Papers API router — upload, list, retrieve, delete, ingestion trigger."""
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, status
 
 from app.core.logging import logger
 from app.core.security import CurrentUser
@@ -10,9 +10,12 @@ from app.core.storage import (
     MAX_FILE_SIZE,
     build_storage_path,
     delete_paper_from_storage,
+    download_paper,
     upload_paper,
 )
 from app.core.supabase import get_supabase_client
+from app.rag.ingestion.pipeline import run_ingestion
+from app.schemas.chunks import ChunkListResponse, ChunkResponse, IngestionStatusResponse
 from app.schemas.papers import PaperListResponse, PaperResponse
 
 router = APIRouter(prefix="/papers", tags=["Papers"])
@@ -39,6 +42,7 @@ def _assert_pdf(file: UploadFile) -> None:
 async def upload_paper_endpoint(
     file: UploadFile,
     current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
 ) -> PaperResponse:
     """Upload a PDF research paper.
 
@@ -91,7 +95,21 @@ async def upload_paper_endpoint(
         )
 
     logger.info("Paper created: %s for user %s", file_id, current_user.id)
+
+    paper_id = result.data[0]["id"]
+
+    # Kick off ingestion in the background so the API returns immediately
+    background_tasks.add_task(_ingest_paper, paper_id, data)
+
     return PaperResponse(**result.data[0])
+
+
+def _ingest_paper(paper_id: str, pdf_bytes: bytes) -> None:
+    """Background task wrapper for the ingestion pipeline."""
+    try:
+        run_ingestion(paper_id, pdf_bytes)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Background ingestion error for %s: %s", paper_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -176,3 +194,87 @@ async def delete_paper(paper_id: str, current_user: CurrentUser) -> None:
     delete_paper_from_storage(file_path)
 
     logger.info("Paper deleted: %s by user %s", paper_id, current_user.id)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/papers/{paper_id}/chunks
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{paper_id}/chunks", response_model=ChunkListResponse)
+async def list_chunks(paper_id: str, current_user: CurrentUser) -> ChunkListResponse:
+    """Return all text chunks for a paper (ownership enforced)."""
+    client = get_supabase_client()
+
+    # Verify ownership
+    try:
+        owner_check = (
+            client.table("papers")
+            .select("id")
+            .eq("id", paper_id)
+            .eq("user_id", str(current_user.id))
+            .single()
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found.")
+
+    if not owner_check.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found.")
+
+    result = (
+        client.table("paper_chunks")
+        .select("id, paper_id, content, page_number, section, chunk_index, created_at")
+        .eq("paper_id", paper_id)
+        .order("chunk_index")
+        .execute()
+    )
+    chunks = [ChunkResponse(**row) for row in (result.data or [])]
+    return ChunkListResponse(chunks=chunks, total=len(chunks))
+
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/{paper_id}/ingest  (manual re-trigger)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{paper_id}/ingest", response_model=IngestionStatusResponse)
+async def trigger_ingestion(
+    paper_id: str,
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+) -> IngestionStatusResponse:
+    """Manually trigger (or re-trigger) the ingestion pipeline for a paper.
+
+    Useful when a paper is stuck in ``uploaded`` or ``failed`` state.
+    """
+    client = get_supabase_client()
+
+    # Verify ownership and get the file_path
+    try:
+        result = (
+            client.table("papers")
+            .select("id, file_path, status")
+            .eq("id", paper_id)
+            .eq("user_id", str(current_user.id))
+            .single()
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found.")
+
+    if not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found.")
+
+    file_path: str = result.data["file_path"]
+
+    # Download PDF bytes from storage then hand off to background task
+    pdf_bytes = download_paper(file_path)
+    background_tasks.add_task(_ingest_paper, paper_id, pdf_bytes)
+
+    return IngestionStatusResponse(
+        paper_id=paper_id,
+        status="processing",
+        message="Ingestion pipeline started.",
+    )
+
