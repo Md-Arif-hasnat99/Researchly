@@ -33,7 +33,10 @@ def _update_paper_status(
     payload: dict = {"status": new_status}
     if total_pages is not None:
         payload["total_pages"] = total_pages
-    if error_message is not None:
+    if new_status == "ready":
+        # Always clear any previous error message when the paper is ready.
+        payload["error_message"] = None
+    elif error_message is not None:
         payload["error_message"] = error_message[:2000]  # guard DB column length
 
     client.table("papers").update(payload).eq("id", paper_id).execute()
@@ -78,7 +81,13 @@ def run_ingestion(paper_id: str, pdf_bytes: bytes) -> int:
             _update_paper_status(paper_id, "ready", total_pages=total_pages)
             return 0
 
-        # 3. Persist chunks (embedding column left NULL; filled in Part 5)
+        # 3. Delete any existing chunks so re-ingestion replaces prior results.
+        get_supabase_client().table("paper_chunks").delete().eq(
+            "paper_id", paper_id
+        ).execute()
+        logger.debug("Cleared existing chunks for paper %s", paper_id)
+
+        # 4. Persist new chunks (embedding column left NULL; filled in Part 5)
         chunks_payload = [
             {
                 "paper_id": chunk.paper_id,

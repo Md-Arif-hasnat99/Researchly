@@ -48,18 +48,34 @@ def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     """Split *text* into overlapping character-level windows.
 
     Attempts to break on sentence boundaries (`. `) when possible.
+
+    Raises:
+        ValueError: If ``chunk_size`` <= 0 or ``overlap`` is outside
+                    ``0 <= overlap < chunk_size``.
     """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+    if not (0 <= overlap < chunk_size):
+        raise ValueError(
+            f"overlap must satisfy 0 <= overlap < chunk_size, "
+            f"got overlap={overlap}, chunk_size={chunk_size}"
+        )
+
     if not text:
         return []
 
     chunks: list[str] = []
     start = 0
-    while start < len(text):
-        end = start + chunk_size
-        segment = text[start:end]
+    text_len = len(text)
 
-        # Try to break on the last ". " within the segment
-        if end < len(text):
+    while start < text_len:
+        end = min(start + chunk_size, text_len)
+        segment = text[start:end]
+        is_final = end >= text_len
+
+        # Only try sentence-boundary splitting for non-final windows so we
+        # never drop trailing content from the last chunk.
+        if not is_final:
             last_sentence = segment.rfind(". ")
             if last_sentence > chunk_size // 2:
                 end = start + last_sentence + 1
@@ -69,9 +85,13 @@ def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
         if segment:
             chunks.append(segment)
 
+        if is_final:
+            break
+
         start = end - overlap
 
     return chunks
+
 
 
 def chunk_pages(

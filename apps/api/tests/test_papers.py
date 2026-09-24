@@ -76,6 +76,7 @@ async def test_upload_success():
 
     with (
         patch("app.api.papers.upload_paper"),
+        patch("app.api.papers._ingest_paper"),  # prevent background task from running
         patch("app.api.papers.get_supabase_client") as mock_client,
     ):
         mock_table = MagicMock()

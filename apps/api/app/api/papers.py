@@ -99,13 +99,23 @@ async def upload_paper_endpoint(
     paper_id = result.data[0]["id"]
 
     # Kick off ingestion in the background so the API returns immediately
-    background_tasks.add_task(_ingest_paper, paper_id, data)
+    background_tasks.add_task(_ingest_paper, paper_id, storage_path)
 
     return PaperResponse(**result.data[0])
 
 
-def _ingest_paper(paper_id: str, pdf_bytes: bytes) -> None:
-    """Background task wrapper for the ingestion pipeline."""
+def _ingest_paper(paper_id: str, file_path: str) -> None:
+    """Background task: download the PDF then run the ingestion pipeline."""
+    try:
+        pdf_bytes = download_paper(file_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Download failed for paper %s: %s", paper_id, exc)
+        from app.core.supabase import get_supabase_client as _gsc  # local import avoids cycle
+
+        _gsc().table("papers").update(
+            {"status": "failed", "error_message": str(exc)[:2000]}
+        ).eq("id", paper_id).execute()
+        return
     try:
         run_ingestion(paper_id, pdf_bytes)
     except Exception as exc:  # noqa: BLE001
@@ -267,10 +277,24 @@ async def trigger_ingestion(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found.")
 
     file_path: str = result.data["file_path"]
+    current_status: str = result.data["status"]
 
-    # Download PDF bytes from storage then hand off to background task
-    pdf_bytes = download_paper(file_path)
-    background_tasks.add_task(_ingest_paper, paper_id, pdf_bytes)
+    # Atomically claim the paper by flipping its status from a non-processing
+    # state to "processing". If the update affects 0 rows the paper is already
+    # being processed and we return 409 to avoid duplicate runs.
+    if current_status == "processing":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ingestion is already in progress for this paper.",
+        )
+
+    client.table("papers").update({"status": "processing"}).eq(
+        "id", paper_id
+    ).neq("status", "processing").execute()
+
+    # Pass only the file_path; the background helper downloads the PDF itself
+    # so this async endpoint is never blocked by synchronous I/O.
+    background_tasks.add_task(_ingest_paper, paper_id, file_path)
 
     return IngestionStatusResponse(
         paper_id=paper_id,
