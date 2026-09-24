@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.auth import router as auth_router
 from app.api.health import router as health_router
 from app.core.config import get_settings
 from app.core.logging import logger
@@ -52,6 +53,7 @@ def create_application() -> FastAPI:
 
     # Mount API routers under /api
     app.include_router(health_router, prefix=settings.API_V1_STR)
+    app.include_router(auth_router, prefix=settings.API_V1_STR)
 
     return app
 
