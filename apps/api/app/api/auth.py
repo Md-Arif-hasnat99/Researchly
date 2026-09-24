@@ -27,7 +27,7 @@ async def get_me(current_user: CurrentUser) -> UserProfile:
             .execute()
         )
         if result.data:
-            return UserProfile(**result.data)
+            return UserProfile.model_validate(result.data)
     except Exception:
         # Profile row may not exist yet (first sign-in before trigger fires);
         # fall through and return JWT-derived data.
