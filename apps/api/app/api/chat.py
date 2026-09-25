@@ -59,6 +59,7 @@ class ChatCitation(BaseModel):
     page_number: int
     section: str | None = None
     similarity_score: float
+    content: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -233,6 +234,7 @@ async def chat(
             page_number=chunk.page_number,
             section=chunk.section,
             similarity_score=chunk.similarity_score,
+            content=chunk.content,
         )
         for chunk in rag_result.cited_chunks
     ]
@@ -305,12 +307,20 @@ async def get_conversation(
     # Fetch messages ordered chronologically
     msg_result = (
         client.table("messages")
-        .select("*")
+        .select("*, citations(*, papers(title), paper_chunks(content))")
         .eq("conversation_id", conversation_id)
         .order("created_at")
         .execute()
     )
-    messages = [MessageResponse(**row) for row in (msg_result.data or [])]
+    
+    # ponytail: manual title mapping to match ChatCitation schema without a new model
+    messages = []
+    for row in (msg_result.data or []):
+        if row.get("citations"):
+            for c in row["citations"]:
+                c["paper_title"] = c.get("papers", {}).get("title", "Unknown Paper")
+                c["content"] = c.get("paper_chunks", {}).get("content", "")
+        messages.append(MessageResponse(**row))
 
     return ConversationDetailResponse(
         **conv_result.data,

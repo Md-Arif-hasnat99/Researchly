@@ -25,6 +25,7 @@ class MessageResponse(MessageBase):
     id: UUID
     conversation_id: UUID
     created_at: datetime
+    citations: list[dict] | None = None
 
     model_config = {"from_attributes": True}
 

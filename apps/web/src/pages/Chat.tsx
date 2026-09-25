@@ -239,20 +239,25 @@ export const Chat: React.FC = () => {
                     Source Evidence
                   </div>
                   {m.citations.map((c, idx) => (
-                    <div
+                    <details
                       key={c.chunk_id + idx}
-                      className="bg-neutral-50 border border-border rounded-lg p-2.5 text-xs text-text-secondary flex items-start justify-between gap-3 hover:border-accent/40 transition-colors"
+                      className="bg-neutral-50 border border-border rounded-lg p-2.5 text-xs text-text-secondary group"
                     >
-                      <div>
+                      <summary className="flex items-center justify-between gap-3 cursor-pointer hover:text-accent transition-colors list-none marker:hidden [&::-webkit-details-marker]:hidden">
                         <div className="font-medium text-text-primary flex items-center gap-1.5">
                           <FileText className="w-3.5 h-3.5 text-accent" />
                           <span>{c.paper_title} · Page {c.page_number}</span>
                         </div>
-                      </div>
-                      <div className="text-[10px] font-mono text-text-muted opacity-60">
-                        {(c.similarity_score * 100).toFixed(1)}%
-                      </div>
-                    </div>
+                        <div className="text-[10px] font-mono text-text-muted opacity-60">
+                          {c.similarity_score ? (c.similarity_score * 100).toFixed(1) + '%' : 'Source'}
+                        </div>
+                      </summary>
+                      {c.content && (
+                        <div className="mt-2 p-2 bg-white border border-border rounded text-text-primary whitespace-pre-wrap leading-relaxed border-l-2 border-l-accent opacity-90">
+                          {c.content}
+                        </div>
+                      )}
+                    </details>
                   ))}
                 </div>
               )}
