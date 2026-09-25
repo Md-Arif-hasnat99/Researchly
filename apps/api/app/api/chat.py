@@ -312,7 +312,7 @@ async def get_conversation(
         .order("created_at")
         .execute()
     )
-    
+
     # ponytail: manual title mapping to match ChatCitation schema without a new model
     messages = []
     for row in (msg_result.data or []):

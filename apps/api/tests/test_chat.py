@@ -280,8 +280,8 @@ class TestGetConversation:
         order_stub = stub.select.return_value.eq.return_value.order.return_value
         assistant_msg = _msg_row(role="assistant", content="A.")
         assistant_msg["citations"] = [{
-            "chunk_id": CHUNK_ID, 
-            "paper_id": PAPER_ID, 
+            "chunk_id": CHUNK_ID,
+            "paper_id": PAPER_ID,
             "papers": {"title": "Test Paper"},
             "page_number": 1,
             "similarity_score": 0.99
