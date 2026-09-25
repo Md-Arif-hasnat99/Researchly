@@ -278,10 +278,18 @@ class TestGetConversation:
             data=_conv_row()
         )
         order_stub = stub.select.return_value.eq.return_value.order.return_value
+        assistant_msg = _msg_row(role="assistant", content="A.")
+        assistant_msg["citations"] = [{
+            "chunk_id": CHUNK_ID,
+            "paper_id": PAPER_ID,
+            "papers": {"title": "Test Paper"},
+            "page_number": 1,
+            "similarity_score": 0.99
+        }]
         order_stub.execute.return_value = MagicMock(
             data=[
                 _msg_row(role="user", content="Q?"),
-                _msg_row(role="assistant", content="A."),
+                assistant_msg,
             ]
         )
 
