@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.auth import router as auth_router
+from app.api.chat import router as chat_router
 from app.api.health import router as health_router
 from app.api.papers import router as papers_router
 from app.api.search import router as search_router
@@ -58,6 +59,7 @@ def create_application() -> FastAPI:
     app.include_router(auth_router, prefix=settings.API_V1_STR)
     app.include_router(papers_router, prefix=settings.API_V1_STR)
     app.include_router(search_router, prefix=settings.API_V1_STR)
+    app.include_router(chat_router, prefix=settings.API_V1_STR)
 
     return app
 
