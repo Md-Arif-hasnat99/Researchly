@@ -7,6 +7,7 @@
 
 import { supabase } from './supabase';
 import type { Paper, PaperListResponse } from '../types/paper';
+import type { ChatResponse, ConversationListResponse, ConversationDetail } from '../types/chat';
 
 const API_BASE = import.meta.env.VITE_API_URL as string | undefined ?? 'http://localhost:8000/api';
 
@@ -77,6 +78,50 @@ export async function getPaper(id: string): Promise<Paper> {
 export async function deletePaper(id: string): Promise<void> {
   const headers = await getAuthHeaders();
   const res = await fetch(`${API_BASE}/papers/${id}`, {
+    method: 'DELETE',
+    headers,
+  });
+  return handleResponse<void>(res);
+}
+
+// ---------------------------------------------------------------------------
+// Chat API
+// ---------------------------------------------------------------------------
+
+export async function askQuestion(
+  query: string,
+  conversation_id?: string,
+  paper_ids?: string[]
+): Promise<ChatResponse> {
+  const headers = await getAuthHeaders();
+  headers['Content-Type'] = 'application/json';
+  const body: Record<string, any> = { query };
+  if (conversation_id) body.conversation_id = conversation_id;
+  if (paper_ids && paper_ids.length > 0) body.paper_ids = paper_ids;
+
+  const res = await fetch(`${API_BASE}/chat`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  return handleResponse<ChatResponse>(res);
+}
+
+export async function listConversations(): Promise<ConversationListResponse> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE}/conversations`, { headers });
+  return handleResponse<ConversationListResponse>(res);
+}
+
+export async function getConversation(id: string): Promise<ConversationDetail> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE}/conversations/${id}`, { headers });
+  return handleResponse<ConversationDetail>(res);
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE}/conversations/${id}`, {
     method: 'DELETE',
     headers,
   });
