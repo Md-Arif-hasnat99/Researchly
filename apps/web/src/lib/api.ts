@@ -95,7 +95,7 @@ export async function askQuestion(
 ): Promise<ChatResponse> {
   const headers = await getAuthHeaders();
   headers['Content-Type'] = 'application/json';
-  const body: Record<string, any> = { query };
+  const body: Record<string, string | number | string[] | undefined> = { query };
   if (conversation_id) body.conversation_id = conversation_id;
   if (paper_ids && paper_ids.length > 0) body.paper_ids = paper_ids;
 
