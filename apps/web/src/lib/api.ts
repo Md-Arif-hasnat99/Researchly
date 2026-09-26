@@ -11,6 +11,8 @@ import type { ChatResponse, ConversationListResponse, ConversationDetail } from 
 import type {
   CompareRequest,
   CompareResponse,
+  GapRequest,
+  GapResponse,
   LiteratureReviewRequest,
   LiteratureReviewResponse,
 } from '../types/research';
@@ -170,4 +172,20 @@ export async function generateLiteratureReview(
     body: JSON.stringify(request),
   });
   return handleResponse<LiteratureReviewResponse>(res);
+}
+
+/**
+ * Identify recurring research gaps across papers, clustered by FR-13
+ * category. Gaps arrive with server-resolved source citations, and gaps
+ * that could not be grounded are omitted rather than guessed.
+ */
+export async function identifyResearchGaps(request: GapRequest): Promise<GapResponse> {
+  const headers = await getAuthHeaders();
+  headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${API_BASE}/research/gaps`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+  });
+  return handleResponse<GapResponse>(res);
 }
