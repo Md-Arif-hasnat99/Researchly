@@ -1,5 +1,6 @@
-"""Pydantic schemas for multi-paper research endpoints (FR-10 through FR-12)."""
+"""Pydantic schemas for multi-paper research endpoints (FR-10 through FR-13)."""
 
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -179,4 +180,107 @@ class LiteratureReviewResponse(BaseModel):
     citations: list[UUID] = Field(
         default_factory=list,
         description="Chunk IDs backing the review (traceability).",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Research gaps (FR-13)
+# ---------------------------------------------------------------------------
+
+
+class GapCategory(str, Enum):
+    """The recurring gap types FR-13 asks the system to identify."""
+
+    limitation = "Limitation"
+    unresolved_problem = "Unresolved Problem"
+    future_work = "Future Work"
+    dataset_limitation = "Dataset Limitation"
+    methodological_gap = "Methodological Gap"
+
+
+class GapRequest(BaseModel):
+    """Request body for POST /api/research/gaps."""
+
+    paper_ids: list[UUID] = Field(
+        ...,
+        min_length=1,
+        max_length=10,
+        description="One to ten papers to analyse. All must belong to the caller.",
+    )
+    categories: list[GapCategory] | None = Field(
+        default=None,
+        description="Restrict extraction to these gap types. Omit for all FR-13 types.",
+    )
+    focus: str | None = Field(
+        default=None,
+        max_length=1000,
+        description="Optional user focus, e.g. 'evaluation and reproducibility'.",
+    )
+    per_paper_top_k: int = Field(
+        default=8,
+        ge=1,
+        le=20,
+        description="Max context chunks retrieved per paper.",
+    )
+
+
+class GapCitation(BaseModel):
+    """One source supporting a gap, resolved server-side."""
+
+    paper_id: UUID
+    paper_title: str
+    page_number: int | None = None
+    chunk_id: UUID | None = None
+
+
+class ResearchGap(BaseModel):
+    """A single identified research gap.
+
+    ``evidence`` quotes what the papers actually say; ``observation`` and
+    ``suggested_direction`` are AI inference. The separation is what lets
+    the UI label the inference honestly (FR-13).
+    """
+
+    title: str
+    category: GapCategory
+    description: str = Field(..., description="The gap itself, in plain language.")
+    evidence: str = Field(
+        default="",
+        description="What the papers state that supports this gap.",
+    )
+    suggested_direction: str = Field(
+        default="",
+        description="AI-suggested research direction. Not a paper finding.",
+    )
+    paper_ids: list[UUID] = Field(
+        default_factory=list,
+        description="Papers this gap was observed across.",
+    )
+    citations: list[GapCitation] = Field(default_factory=list)
+    recurrence: int = Field(
+        default=1,
+        ge=1,
+        description="How many papers raised this gap. Higher means more recurring.",
+    )
+
+
+class GapCluster(BaseModel):
+    """A set of gaps of the same category."""
+
+    category: GapCategory
+    gaps: list[ResearchGap] = Field(default_factory=list)
+
+
+class GapResponse(BaseModel):
+    """Structured research-gap analysis returned to the client."""
+
+    papers: list[ComparePaperRef]
+    clusters: list[GapCluster] = Field(
+        default_factory=list,
+        description="Gaps grouped by FR-13 category.",
+    )
+    summary: str = Field(default="", description="Cross-paper gap overview.")
+    citations: list[UUID] = Field(
+        default_factory=list,
+        description="Chunk IDs backing the identified gaps (traceability).",
     )

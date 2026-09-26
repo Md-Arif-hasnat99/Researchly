@@ -1,10 +1,11 @@
-"""Multi-paper research API router (Part 11, Part 12).
+"""Multi-paper research API router (Part 11, Part 12, Part 13).
 
 Endpoints:
-    POST /api/research/compare          — structured cross-paper comparison matrix
+    POST /api/research/compare           — structured cross-paper comparison matrix
     POST /api/research/literature-review — structured multi-section synthesis
+    POST /api/research/gaps              — recurring research gap extraction
 
-Shared flow for both endpoints:
+Shared flow for all endpoints:
     1. Validate the caller's ownership of every requested paper.
     2. Retrieve per-paper context chunks (cross-paper retrieval).
     3. Generate a grounded, schema-constrained result.
@@ -19,12 +20,15 @@ from app.core.logging import logger
 from app.core.security import CurrentUser
 from app.core.supabase import get_supabase_client
 from app.rag.generation.compare import PaperContext, generate_comparison
+from app.rag.generation.gaps import identify_research_gaps
 from app.rag.generation.literature_review import generate_literature_review
 from app.rag.retrieval.search import similarity_search
 from app.schemas.research import (
     DEFAULT_ASPECTS,
     CompareRequest,
     CompareResponse,
+    GapRequest,
+    GapResponse,
     LiteratureReviewRequest,
     LiteratureReviewResponse,
 )
@@ -139,6 +143,12 @@ _COMPARISON_QUERY = "dataset model method metrics results limitations"
 _REVIEW_QUERY = (
     "introduction background approach methodology dataset evaluation "
     "results limitations future work"
+)
+# Gap analysis searches specifically for the language of unresolved problems:
+# stated limitations, caveats, open questions, and future-work sections.
+_GAP_QUERY = (
+    "limitations future work open questions challenges weaknesses "
+    "evaluation threats unresolved problems"
 )
 
 
@@ -298,6 +308,84 @@ async def generate_review(
         len(result.papers),
         len(result.sections),
         grounded,
+        result.citation_count,
+    )
+
+    return result.to_response()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/research/gaps
+# ---------------------------------------------------------------------------
+
+
+@router.post("/gaps", response_model=GapResponse)
+async def find_gaps(
+    request: GapRequest,
+    current_user: CurrentUser,
+) -> GapResponse:
+    """Identify recurring research gaps across the caller's papers.
+
+    Returns gaps clustered by the FR-13 categories, most recurring first.
+    Each gap separates the evidence stated by the papers from the AI's
+    interpretation, and carries server-resolved source citations.
+    """
+    user_id = str(current_user.id)
+    client = get_supabase_client()
+    paper_ids = [str(pid) for pid in request.paper_ids]
+
+    # 1. Verify ownership and index state
+    papers = _fetch_owned_papers(client, user_id, paper_ids, action="analysed")
+
+    # 2. Cross-paper retrieval, steered toward limitations and future work
+    contexts = _build_contexts(
+        user_id=user_id,
+        papers=papers,
+        per_paper_top_k=request.per_paper_top_k,
+        focus=request.focus,
+        default_query=_GAP_QUERY,
+    )
+
+    if not contexts:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "No indexed content was found for the selected papers. "
+                "Wait for processing to finish, then try again."
+            ),
+        )
+
+    # 3. Extract gaps
+    try:
+        result = identify_research_gaps(
+            contexts=contexts,
+            categories=request.categories,
+            focus=request.focus,
+        )
+    except RuntimeError as exc:
+        logger.error("Gap analysis config error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.error("Gap analysis failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Research gap analysis failed. Please try again.",
+        ) from exc
+
+    logger.info(
+        "Gap analysis complete | user=%s papers=%d gaps=%d categories=%d citations=%d",
+        user_id,
+        len(result.papers),
+        result.gap_count,
+        len(result.clusters),
         result.citation_count,
     )
 
