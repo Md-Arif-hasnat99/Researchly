@@ -5,6 +5,7 @@ import { AppShell } from './components/layout/AppShell';
 import { ProtectedRoute } from './components/layout/ProtectedRoute';
 import { Dashboard } from './pages/Dashboard';
 import { Papers } from './pages/Papers';
+import { PaperDetail } from './pages/PaperDetail';
 import { Chat } from './pages/Chat';
 import { Compare } from './pages/Compare';
 import { LiteratureReview } from './pages/LiteratureReview';
@@ -34,6 +35,7 @@ export const App: React.FC = () => {
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="papers" element={<Papers />} />
+            <Route path="papers/:id" element={<PaperDetail />} />
             <Route path="chat" element={<Chat />} />
             <Route path="chat/:conversationId" element={<Chat />} />
             <Route path="compare" element={<Compare />} />

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -108,6 +109,7 @@ const EmptyState: React.FC<{ onUpload: () => void }> = ({ onUpload }) => (
 // ---------------------------------------------------------------------------
 
 export const Papers: React.FC = () => {
+  const navigate = useNavigate();
   const [papers, setPapers] = useState<Paper[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -268,7 +270,7 @@ export const Papers: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2 self-end sm:self-center flex-shrink-0">
-                <Button variant="ghost" size="sm" aria-label="View paper details">
+                <Button variant="ghost" size="sm" aria-label="View paper details" onClick={() => navigate(`/papers/${paper.id}`)}>
                   <Eye className="w-4 h-4" />
                 </Button>
                 <Button
