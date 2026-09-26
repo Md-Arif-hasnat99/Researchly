@@ -1,11 +1,21 @@
-"""Search API router — POST /api/search."""
+"""Search API router — POST /api/search (Part 14: hybrid retrieval)."""
 
 from fastapi import APIRouter, HTTPException, status
 
 from app.core.logging import logger
 from app.core.security import CurrentUser
-from app.rag.retrieval.search import similarity_search
-from app.schemas.search import SearchRequest, SearchResponse
+from app.rag.retrieval.search import (
+    SearchOutcome,
+    hybrid_search,
+    keyword_search,
+    similarity_search,
+)
+from app.schemas.search import (
+    SearchMode,
+    SearchRequest,
+    SearchResponse,
+    SearchResultChunk,
+)
 
 router = APIRouter(prefix="/search", tags=["Search"])
 
@@ -15,22 +25,59 @@ async def search_papers(
     request: SearchRequest,
     current_user: CurrentUser,
 ) -> SearchResponse:
-    """Semantic search across the user's paper library.
+    """Search the user's paper library.
 
-    Embeds the query with Gemini and performs a cosine-similarity search
-    against all chunks belonging to the authenticated user (optionally
-    restricted to specific paper IDs).
+    Dispatches to the retriever named by ``mode``:
 
-    Returns top-K chunks ordered by similarity score descending.
+    * ``hybrid`` (default) — vector + keyword results fused by Reciprocal
+      Rank Fusion.  Recovers exact names, abbreviations, and dataset
+      identifiers that vector search alone tends to blur.
+    * ``vector`` — cosine similarity only.
+    * ``keyword`` — full-text only; requires no embedding call, so it
+      still works with no Gemini API key configured.
+
+    The response reports the mode that actually ran, so a hybrid search
+    that had to fall back to vector-only is visible to the caller.
     """
+    user_id = str(current_user.id)
+    outcome: SearchOutcome
+    results: list[SearchResultChunk]
+
     try:
-        results = similarity_search(
-            query=request.query,
-            user_id=str(current_user.id),
-            top_k=request.top_k,
-            similarity_threshold=request.similarity_threshold,
-            paper_ids=request.paper_ids,
-        )
+        if request.mode is SearchMode.keyword:
+            # No embedding call, so this path cannot raise the missing
+            # API key RuntimeError the other two modes can.
+            results = keyword_search(
+                query=request.query,
+                user_id=user_id,
+                top_k=request.top_k,
+                paper_ids=request.paper_ids,
+            )
+            outcome = SearchOutcome(results=results, mode=SearchMode.keyword)
+        elif request.mode is SearchMode.vector:
+            results = similarity_search(
+                query=request.query,
+                user_id=user_id,
+                top_k=request.top_k,
+                similarity_threshold=request.similarity_threshold,
+                paper_ids=request.paper_ids,
+            )
+            outcome = SearchOutcome(results=results, mode=SearchMode.vector)
+        else:
+            outcome = hybrid_search(
+                query=request.query,
+                user_id=user_id,
+                top_k=request.top_k,
+                similarity_threshold=request.similarity_threshold,
+                paper_ids=request.paper_ids,
+            )
+            if outcome.keyword_degraded:
+                logger.warning(
+                    "Hybrid search degraded to vector-only | user=%s query=%r",
+                    user_id,
+                    request.query[:80],
+                )
+            results = outcome.results
     except RuntimeError as exc:
         # Gemini API key not configured
         logger.error("Search failed — configuration error: %s", exc)
@@ -45,8 +92,16 @@ async def search_papers(
             detail="Search failed. Please try again.",
         ) from exc
 
+    logger.info(
+        "Search complete | user=%s mode=%s results=%d",
+        user_id,
+        outcome.mode.value,
+        len(results),
+    )
+
     return SearchResponse(
         query=request.query,
+        mode=outcome.mode,
         results=results,
         total_results=len(results),
     )

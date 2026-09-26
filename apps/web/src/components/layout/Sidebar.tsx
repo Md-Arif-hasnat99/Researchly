@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   FileText,
+  Search,
   MessageSquare,
   GitCompare,
   BookOpen,
@@ -20,6 +21,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
   const mainNav = [
     { name: 'Overview', to: '/dashboard', icon: LayoutDashboard },
     { name: 'Papers', to: '/papers', icon: FileText },
+    { name: 'Search', to: '/search', icon: Search },
     { name: 'Chat', to: '/chat', icon: MessageSquare },
     { name: 'Compare', to: '/compare', icon: GitCompare },
     { name: 'Literature Review', to: '/literature-review', icon: BookOpen },

@@ -8,6 +8,7 @@
 import { supabase } from './supabase';
 import type { Paper, PaperListResponse } from '../types/paper';
 import type { ChatResponse, ConversationListResponse, ConversationDetail } from '../types/chat';
+import type { SearchRequest, SearchResponse } from '../types/search';
 import type {
   CompareRequest,
   CompareResponse,
@@ -134,6 +135,29 @@ export async function deleteConversation(id: string): Promise<void> {
     headers,
   });
   return handleResponse<void>(res);
+}
+
+// ---------------------------------------------------------------------------
+// Search API
+// ---------------------------------------------------------------------------
+
+/**
+ * Search the paper library. Defaults to hybrid retrieval (FR-14), which
+ * fuses vector and keyword results so exact model names, abbreviations,
+ * and dataset names are findable alongside conceptual matches.
+ *
+ * Each result carries `matched_by` so the UI can explain why it came
+ * back, and the response `mode` reflects the retriever that actually ran.
+ */
+export async function searchPapers(request: SearchRequest): Promise<SearchResponse> {
+  const headers = await getAuthHeaders();
+  headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${API_BASE}/search`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+  });
+  return handleResponse<SearchResponse>(res);
 }
 
 // ---------------------------------------------------------------------------
