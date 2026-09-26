@@ -2,8 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { Send, FileText, MessageSquare, Plus, Trash2, Loader2 } from 'lucide-react';
-import { listConversations, getConversation, askQuestion, deleteConversation } from '../lib/api';
+import { listConversations, getConversation, askQuestion, deleteConversation, listPapers } from '../lib/api';
+import { PaperScopeSelector } from '../components/chat/PaperScopeSelector';
 import type { Conversation, Message, ChatCitation } from '../types/chat';
+import type { Paper } from '../types/paper';
 
 // Extended message type for frontend to support inline citations from the POST response
 interface ChatMessage extends Message {
@@ -19,12 +21,30 @@ export const Chat: React.FC = () => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [papers, setPapers] = useState<Paper[]>([]);
+  const [scopedPaperIds, setScopedPaperIds] = useState<string[]>([]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchConversations();
+    fetchPapers();
   }, []);
+
+  const fetchPapers = async () => {
+    try {
+      const data = await listPapers();
+      setPapers(data.papers);
+    } catch (err) {
+      console.error('Failed to list papers for scoping:', err);
+    }
+  };
+
+  const toggleScope = (id: string) => {
+    setScopedPaperIds((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  };
 
   useEffect(() => {
     if (conversationId) {
@@ -95,7 +115,7 @@ export const Chat: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const res = await askQuestion(query, conversationId);
+      const res = await askQuestion(query, conversationId, scopedPaperIds);
       
       if (!conversationId) {
         // If it was a new conversation, navigate to the new URL
@@ -277,20 +297,28 @@ export const Chat: React.FC = () => {
         </div>
 
         {/* Query Input */}
-        <div className="p-4 border-t border-border bg-surface">
-          <form onSubmit={handleSendMessage} className="flex items-center gap-2">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask a question about your indexed papers..."
-              disabled={isLoading}
-              className="flex-1 bg-background border border-border rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
-            />
-            <Button type="submit" variant="primary" size="md" disabled={!input.trim() || isLoading}>
-              <Send className="w-4 h-4" />
-            </Button>
-          </form>
+        <div className="border-t border-border bg-surface">
+          <PaperScopeSelector
+            papers={papers}
+            selected={scopedPaperIds}
+            onToggle={toggleScope}
+            disabled={isLoading}
+          />
+          <div className="p-4 pt-1">
+            <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Ask a question about your indexed papers..."
+                disabled={isLoading}
+                className="flex-1 bg-background border border-border rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+              />
+              <Button type="submit" variant="primary" size="md" disabled={!input.trim() || isLoading}>
+                <Send className="w-4 h-4" />
+              </Button>
+            </form>
+          </div>
         </div>
       </div>
     </div>

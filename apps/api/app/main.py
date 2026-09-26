@@ -8,6 +8,7 @@ from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.health import router as health_router
 from app.api.papers import router as papers_router
+from app.api.research import router as research_router
 from app.api.search import router as search_router
 from app.core.config import get_settings
 from app.core.logging import logger
@@ -60,6 +61,7 @@ def create_application() -> FastAPI:
     app.include_router(papers_router, prefix=settings.API_V1_STR)
     app.include_router(search_router, prefix=settings.API_V1_STR)
     app.include_router(chat_router, prefix=settings.API_V1_STR)
+    app.include_router(research_router, prefix=settings.API_V1_STR)
 
     return app
 
