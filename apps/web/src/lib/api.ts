@@ -8,6 +8,7 @@
 import { supabase } from './supabase';
 import type { Paper, PaperListResponse } from '../types/paper';
 import type { ChatResponse, ConversationListResponse, ConversationDetail } from '../types/chat';
+import type { CompareRequest, CompareResponse } from '../types/research';
 
 const API_BASE = import.meta.env.VITE_API_URL as string | undefined ?? 'http://localhost:8000/api';
 
@@ -126,4 +127,24 @@ export async function deleteConversation(id: string): Promise<void> {
     headers,
   });
   return handleResponse<void>(res);
+}
+
+// ---------------------------------------------------------------------------
+// Research API
+// ---------------------------------------------------------------------------
+
+/**
+ * Compare two to six papers across chosen aspects.
+ * Returns a matrix with one row per aspect and one cell per paper;
+ * each cell carries its source page and chunk for traceability.
+ */
+export async function comparePapers(request: CompareRequest): Promise<CompareResponse> {
+  const headers = await getAuthHeaders();
+  headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${API_BASE}/research/compare`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+  });
+  return handleResponse<CompareResponse>(res);
 }
