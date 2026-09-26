@@ -4,7 +4,8 @@ export interface ChatCitation {
   paper_title: string;
   page_number: number;
   section: string | null;
-  similarity_score: number;
+  // Null when the source was surfaced without a vector comparison.
+  similarity_score: number | null;
   content?: string;
 }
 

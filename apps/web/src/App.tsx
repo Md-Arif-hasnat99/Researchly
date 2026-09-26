@@ -6,6 +6,7 @@ import { ProtectedRoute } from './components/layout/ProtectedRoute';
 import { Dashboard } from './pages/Dashboard';
 import { Papers } from './pages/Papers';
 import { PaperDetail } from './pages/PaperDetail';
+import { Search } from './pages/Search';
 import { Chat } from './pages/Chat';
 import { Compare } from './pages/Compare';
 import { LiteratureReview } from './pages/LiteratureReview';
@@ -36,6 +37,7 @@ export const App: React.FC = () => {
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="papers" element={<Papers />} />
             <Route path="papers/:id" element={<PaperDetail />} />
+            <Route path="search" element={<Search />} />
             <Route path="chat" element={<Chat />} />
             <Route path="chat/:conversationId" element={<Chat />} />
             <Route path="compare" element={<Compare />} />

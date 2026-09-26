@@ -58,7 +58,10 @@ class ChatCitation(BaseModel):
     paper_title: str
     page_number: int
     section: str | None = None
-    similarity_score: float
+    # Optional because the citations column is nullable and the retrieval
+    # layer now also produces keyword-only hits with no vector score. The
+    # chat pipeline is vector-only today, so this is None only in theory.
+    similarity_score: float | None = None
     content: str | None = None
 
 
