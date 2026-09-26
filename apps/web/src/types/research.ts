@@ -33,3 +33,38 @@ export interface CompareResponse {
   summary: string;
   citations: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Literature review (FR-12)
+// ---------------------------------------------------------------------------
+
+export interface LiteratureReviewRequest {
+  paper_ids: string[];
+  title?: string;
+  focus?: string;
+  sections?: string[];
+  per_paper_top_k?: number;
+}
+
+export interface ReviewCitation {
+  paper_id: string;
+  paper_title: string;
+  page_number: number | null;
+  chunk_id: string | null;
+}
+
+export interface ReviewSection {
+  heading: string;
+  content: string;
+  citations: ReviewCitation[];
+  /** True when the retrieved context could not support this section. */
+  insufficient_context: boolean;
+}
+
+export interface LiteratureReviewResponse {
+  title: string;
+  papers: ComparePaperRef[];
+  sections: ReviewSection[];
+  references: ComparePaperRef[];
+  citations: string[];
+}

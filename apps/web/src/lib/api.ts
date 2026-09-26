@@ -8,7 +8,12 @@
 import { supabase } from './supabase';
 import type { Paper, PaperListResponse } from '../types/paper';
 import type { ChatResponse, ConversationListResponse, ConversationDetail } from '../types/chat';
-import type { CompareRequest, CompareResponse } from '../types/research';
+import type {
+  CompareRequest,
+  CompareResponse,
+  LiteratureReviewRequest,
+  LiteratureReviewResponse,
+} from '../types/research';
 
 const API_BASE = import.meta.env.VITE_API_URL as string | undefined ?? 'http://localhost:8000/api';
 
@@ -147,4 +152,22 @@ export async function comparePapers(request: CompareRequest): Promise<CompareRes
     body: JSON.stringify(request),
   });
   return handleResponse<CompareResponse>(res);
+}
+
+/**
+ * Generate a structured, multi-section literature review across papers.
+ * Sections the retrieved context could not support come back flagged
+ * as `insufficient_context` rather than padded with invented prose.
+ */
+export async function generateLiteratureReview(
+  request: LiteratureReviewRequest
+): Promise<LiteratureReviewResponse> {
+  const headers = await getAuthHeaders();
+  headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${API_BASE}/research/literature-review`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+  });
+  return handleResponse<LiteratureReviewResponse>(res);
 }

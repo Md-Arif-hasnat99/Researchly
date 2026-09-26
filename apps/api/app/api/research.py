@@ -1,13 +1,15 @@
-"""Multi-paper research API router (Part 11).
+"""Multi-paper research API router (Part 11, Part 12).
 
 Endpoints:
-    POST /api/research/compare — structured cross-paper comparison matrix
+    POST /api/research/compare          — structured cross-paper comparison matrix
+    POST /api/research/literature-review — structured multi-section synthesis
 
-Flow for POST /api/research/compare:
+Shared flow for both endpoints:
     1. Validate the caller's ownership of every requested paper.
     2. Retrieve per-paper context chunks (cross-paper retrieval).
-    3. Generate a grounded comparison matrix.
-    4. Return rows of cells, each traceable to a source page and chunk.
+    3. Generate a grounded, schema-constrained result.
+    4. Return content where every factual claim is traceable to a source
+       page and chunk.
 """
 
 from fastapi import APIRouter, HTTPException, status
@@ -17,11 +19,14 @@ from app.core.logging import logger
 from app.core.security import CurrentUser
 from app.core.supabase import get_supabase_client
 from app.rag.generation.compare import PaperContext, generate_comparison
+from app.rag.generation.literature_review import generate_literature_review
 from app.rag.retrieval.search import similarity_search
 from app.schemas.research import (
     DEFAULT_ASPECTS,
     CompareRequest,
     CompareResponse,
+    LiteratureReviewRequest,
+    LiteratureReviewResponse,
 )
 
 router = APIRouter(prefix="/research", tags=["Research"])
@@ -32,7 +37,12 @@ router = APIRouter(prefix="/research", tags=["Research"])
 # ---------------------------------------------------------------------------
 
 
-def _fetch_owned_papers(client: Client, user_id: str, paper_ids: list[str]) -> dict:
+def _fetch_owned_papers(
+    client: Client,
+    user_id: str,
+    paper_ids: list[str],
+    action: str = "compared",
+) -> dict:
     """Return {paper_id: row} for the caller's own ready papers.
 
     Raises 404 if any requested paper is missing, not owned, or not yet
@@ -65,7 +75,7 @@ def _fetch_owned_papers(client: Client, user_id: str, paper_ids: list[str]) -> d
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "These papers are still being indexed and cannot be compared yet: "
+                f"These papers are still being indexed and cannot be {action} yet: "
                 + ", ".join(not_ready)
             ),
         )
@@ -78,13 +88,18 @@ def _build_contexts(
     papers: dict,
     per_paper_top_k: int,
     focus: str | None,
+    default_query: str,
 ) -> list[PaperContext]:
-    """Retrieve per-paper context and group it for matrix generation."""
+    """Retrieve per-paper context and group it for cross-paper generation.
+
+    Each paper is searched **independently** so source identity is preserved
+    through synthesis: a claim in the output can always be traced back to
+    exactly one paper's chunks.
+    """
     contexts: list[PaperContext] = []
     # The retrieval query steers which chunks each paper contributes. The
-    # focus string (or a neutral default) is embedded per paper so every
-    # paper is searched independently — this preserves source identity.
-    query = focus or "dataset model method metrics results limitations"
+    # focus string (or a caller-supplied default) is embedded per paper.
+    query = focus or default_query
 
     for paper_id, row in papers.items():
         try:
@@ -100,7 +115,7 @@ def _build_contexts(
             continue
 
         if not chunks:
-            logger.info("No chunks retrieved for paper %s; excluding from matrix.", paper_id)
+            logger.info("No chunks retrieved for paper %s; excluding.", paper_id)
             continue
 
         contexts.append(
@@ -115,6 +130,16 @@ def _build_contexts(
         )
 
     return contexts
+
+
+# Neutral retrieval probes used when the caller supplies no focus. Each
+# endpoint embeds its own so the retrieved chunks match the content the
+# generator is about to ask for.
+_COMPARISON_QUERY = "dataset model method metrics results limitations"
+_REVIEW_QUERY = (
+    "introduction background approach methodology dataset evaluation "
+    "results limitations future work"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +171,7 @@ async def compare_papers(
         papers=papers,
         per_paper_top_k=request.per_paper_top_k,
         focus=request.focus,
+        default_query=_COMPARISON_QUERY,
     )
 
     if len(contexts) < 2:
@@ -196,3 +222,83 @@ async def compare_papers(
         summary=result.summary,
         citations=result.citations,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/research/literature-review
+# ---------------------------------------------------------------------------
+
+
+@router.post("/literature-review", response_model=LiteratureReviewResponse)
+async def generate_review(
+    request: LiteratureReviewRequest,
+    current_user: CurrentUser,
+) -> LiteratureReviewResponse:
+    """Generate a structured literature review across the caller's papers.
+
+    Returns ordered sections following the FR-12 structure. Each section
+    carries the sources it drew on, and a section the context could not
+    support is explicitly flagged rather than padded with invented prose.
+    """
+    user_id = str(current_user.id)
+    client = get_supabase_client()
+    paper_ids = [str(pid) for pid in request.paper_ids]
+
+    # 1. Verify ownership and index state
+    papers = _fetch_owned_papers(client, user_id, paper_ids, action="synthesized")
+
+    # 2. Cross-paper retrieval
+    contexts = _build_contexts(
+        user_id=user_id,
+        papers=papers,
+        per_paper_top_k=request.per_paper_top_k,
+        focus=request.focus,
+        default_query=_REVIEW_QUERY,
+    )
+
+    if len(contexts) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "At least two indexed papers are required for a literature review. "
+                "Upload and process more papers, then try again."
+            ),
+        )
+
+    # 3. Generate the review
+    try:
+        result = generate_literature_review(
+            contexts=contexts,
+            sections=request.sections,
+            title=request.title,
+            focus=request.focus,
+        )
+    except RuntimeError as exc:
+        logger.error("Literature review config error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.error("Literature review generation failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Literature review generation failed. Please try again.",
+        ) from exc
+
+    grounded = sum(1 for s in result.sections if not s.insufficient_context)
+    logger.info(
+        "Literature review complete | user=%s papers=%d sections=%d grounded=%d citations=%d",
+        user_id,
+        len(result.papers),
+        len(result.sections),
+        grounded,
+        result.citation_count,
+    )
+
+    return result.to_response()
