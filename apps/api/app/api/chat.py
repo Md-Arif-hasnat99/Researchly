@@ -18,7 +18,7 @@ Flow for POST /api/chat:
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.logging import logger
 from app.core.security import CurrentUser
@@ -57,6 +57,19 @@ class ChatRequest(BaseModel):
             "server default, which is off for chat."
         ),
     )
+
+    @field_validator("query")
+    @classmethod
+    def _reject_blank_query(cls, value: str) -> str:
+        """Reject a whitespace-only question.
+
+        ``min_length=1`` admits " ", which spends a retrieval round trip
+        and a generation call to produce an answer to nothing. Search
+        rejects the same input for the same reason.
+        """
+        if not value.strip():
+            raise ValueError("query must not be blank")
+        return value
 
 
 class ChatCitation(BaseModel):
@@ -220,10 +233,13 @@ async def chat(
             rerank=request.rerank,
         )
     except RuntimeError as exc:
-        logger.error("RAG pipeline config error: %s", exc)
+        # The RuntimeError text names internal configuration (which env
+        # var is missing). Log it for the operator; answer the user with
+        # a message that does not describe the server's wiring.
+        logger.error("RAG pipeline config error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+            detail="Answer generation is temporarily unavailable. Please try again shortly.",
         ) from exc
     except Exception as exc:
         logger.error("RAG pipeline error: %s", exc, exc_info=True)

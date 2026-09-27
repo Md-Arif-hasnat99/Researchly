@@ -29,22 +29,31 @@ const API_BASE = import.meta.env.VITE_API_URL as string | undefined ?? 'http://l
  *
  * `message` is always populated with something a user can be shown, and
  * the machine-readable fields are kept for code that needs to branch
- * (401 meaning the session expired, a 500 that can be retried). For 5xx
- * responses the message carries the server's `X-Request-ID`, so a user
- * reporting a failure can quote an id that leads straight to the stack
- * trace in the logs.
+ * (401 meaning the session expired, a 429 that should wait, a 500 that
+ * can be retried). For 5xx responses the message carries the server's
+ * `X-Request-ID`, so a user reporting a failure can quote an id that
+ * leads straight to the stack trace in the logs.
  */
 export class ApiError extends Error {
   status: number;
   code?: string;
   requestId?: string;
+  /** Seconds the server asked the caller to wait, on a 429. */
+  retryAfterSeconds?: number;
 
-  constructor(message: string, status: number, code?: string, requestId?: string) {
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    requestId?: string,
+    retryAfterSeconds?: number,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.requestId = requestId;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -76,7 +85,14 @@ async function handleResponse<T>(res: Response): Promise<T> {
     if (res.status >= 500 && requestId) {
       message = `${message} (ref: ${requestId})`;
     }
-    throw new ApiError(message, res.status, code, requestId);
+    // A throttled request carries how long to wait, so the UI can say
+    // "try again in a moment" rather than showing a bare failure.
+    const retryAfter = res.headers.get('retry-after');
+    const retryAfterSeconds = retryAfter ? Number(retryAfter) : undefined;
+    if (res.status === 429 && retryAfterSeconds !== undefined) {
+      message = `${message} (try again in ${retryAfterSeconds}s)`;
+    }
+    throw new ApiError(message, res.status, code, requestId, retryAfterSeconds);
   }
   // 204 No Content
   if (res.status === 204) return undefined as T;

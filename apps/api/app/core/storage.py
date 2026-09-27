@@ -3,11 +3,26 @@
 import logging
 from pathlib import PurePosixPath
 
+from app.core.config import get_settings
 from app.core.supabase import get_supabase_client
 
 logger = logging.getLogger("researchly")
 
+#: The one source of truth for the bucket name. The storage migration
+#: provisions policies for exactly this string; a test asserts the two
+#: agree, because a mismatch leaves every policy inert and the bucket
+#: unprotected while the code looks correct.
 BUCKET = "papers"
+
+
+def max_file_size() -> int:
+    """Upload ceiling in bytes, from configuration."""
+    return get_settings().MAX_UPLOAD_MB * 1024 * 1024
+
+
+#: Kept for the callers and tests that imported it as a constant. The
+#: default matches MAX_UPLOAD_MB; request handling calls max_file_size()
+#: so a deployment can lower or raise the limit without a code change.
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
@@ -15,6 +30,12 @@ def build_storage_path(user_id: str, file_id: str) -> str:
     """Return the deterministic storage path for a paper PDF.
 
     Format: ``{user_id}/{file_id}.pdf``
+
+    Both halves are server-generated — a JWT subject and a fresh UUID —
+    so a caller-supplied filename can never reach this path. The
+    ``{user_id}/`` prefix is what the storage RLS policies key on, which
+    is why the layout is part of the security model rather than a
+    naming preference.
     """
     return str(PurePosixPath(user_id) / f"{file_id}.pdf")
 
@@ -65,7 +86,10 @@ def download_paper(storage_path: str) -> bytes:
         logger.info("Downloaded paper from storage: %s (%d bytes)", storage_path, len(data))
         return data
     except Exception as exc:
-        raise RuntimeError(
-            f"Failed to download paper from storage ({storage_path}): {exc}"
-        ) from exc
+        # Deliberately no path and no underlying message: this text is
+        # persisted on the paper row and returned to the user by
+        # GET /api/papers/{id}, so it must not disclose the storage
+        # layout or a driver's error verbatim. The full error is in the
+        # log, where the request id ties it to this call.
+        raise RuntimeError("Failed to download the paper from storage.") from exc
 

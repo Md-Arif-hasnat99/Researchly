@@ -3,7 +3,7 @@
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Default comparison aspects (FR-11). Each becomes one row of the matrix.
 DEFAULT_ASPECTS: list[str] = [
@@ -27,9 +27,13 @@ class CompareRequest(BaseModel):
     )
     aspects: list[str] | None = Field(
         default=None,
+        # Bounded because each aspect becomes a row of the generated
+        # matrix: the count is both a prompt-length and a cost multiplier,
+        # and a caller-supplied list has no natural upper bound.
+        max_length=12,
         description=(
             "Comparison aspects (rows of the matrix). "
-            "Omit to use the default set from FR-11."
+            "Omit to use the default set from FR-11. At most 12."
         ),
     )
     per_paper_top_k: int = Field(
@@ -43,6 +47,24 @@ class CompareRequest(BaseModel):
         max_length=1000,
         description="Optional user focus, e.g. 'compare evaluation methodology'.",
     )
+
+    @field_validator("aspects")
+    @classmethod
+    def _bound_aspect_items(cls, value: list[str] | None) -> list[str] | None:
+        """Reject blank or oversized aspect labels.
+
+        A single aspect longer than the field limit would otherwise be
+        copied straight into the generation prompt, and an empty one
+        produces a matrix row with no question in it.
+        """
+        if value is None:
+            return value
+        for aspect in value:
+            if not aspect.strip():
+                raise ValueError("aspects must not contain blank entries")
+            if len(aspect) > 200:
+                raise ValueError("each aspect must be at most 200 characters")
+        return value
 
 
 class CompareCell(BaseModel):
@@ -127,7 +149,12 @@ class LiteratureReviewRequest(BaseModel):
     )
     sections: list[str] | None = Field(
         default=None,
-        description="Section headings. Omit to use the FR-12 default structure.",
+        # Bounded for the same reason as CompareRequest.aspects: each
+        # entry is a heading in the generated review.
+        max_length=12,
+        description=(
+            "Section headings. Omit to use the FR-12 default structure. At most 12."
+        ),
     )
     per_paper_top_k: int = Field(
         default=8,
@@ -135,6 +162,19 @@ class LiteratureReviewRequest(BaseModel):
         le=20,
         description="Max context chunks retrieved per paper.",
     )
+
+    @field_validator("sections")
+    @classmethod
+    def _bound_section_items(cls, value: list[str] | None) -> list[str] | None:
+        """Reject blank or oversized section headings."""
+        if value is None:
+            return value
+        for heading in value:
+            if not heading.strip():
+                raise ValueError("sections must not contain blank entries")
+            if len(heading) > 200:
+                raise ValueError("each section heading must be at most 200 characters")
+        return value
 
 
 class ReviewCitation(BaseModel):

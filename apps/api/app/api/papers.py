@@ -1,16 +1,18 @@
 """Papers API router — upload, list, retrieve, delete, ingestion trigger."""
 
+import re
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, status
 
+from app.core.errors import safe_error_message
 from app.core.logging import logger
 from app.core.security import CurrentUser
 from app.core.storage import (
-    MAX_FILE_SIZE,
     build_storage_path,
     delete_paper_from_storage,
     download_paper,
+    max_file_size,
     upload_paper,
 )
 from app.core.supabase import get_supabase_client
@@ -22,15 +24,82 @@ router = APIRouter(prefix="/papers", tags=["Papers"])
 
 _ALLOWED_CONTENT_TYPES = {"application/pdf"}
 
+#: Every PDF starts with these five bytes. Checked because the declared
+#: Content-Type is attacker-controlled: without this, a 2 GB archive with
+#: `Content-Type: application/pdf` is stored in full and only discovered
+#: to be unparseable later, in the background task, after the bytes are
+#: already in the bucket.
+_PDF_MAGIC = b"%PDF-"
+
+_READ_CHUNK = 1024 * 1024  # 1 MiB
+
+#: Characters stripped from a client-supplied filename. C0/C1 controls
+#: can corrupt logs and terminal output, and zero-width characters
+#: render as nothing while still being stored, so two visually identical
+#: titles can differ in the database.
+_UNSAFE_FILENAME_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f-‏‪-‮﻿]")
+
 
 def _assert_pdf(file: UploadFile) -> None:
-    """Raise 422 if the uploaded file is not a PDF."""
+    """Raise 422 if the uploaded file is not declared as a PDF."""
     content_type = (file.content_type or "").split(";")[0].strip().lower()
     if content_type not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Only PDF files are accepted.",
         )
+
+
+async def _read_capped(file: UploadFile, limit: int) -> bytes:
+    """Read at most *limit* bytes, stopping as soon as the cap is passed.
+
+    Reading the whole body first and checking its length afterwards means
+    a client can make the server buffer an arbitrarily large upload
+    before being refused — an unauthenticated-ish memory amplifier, and
+    the request is not even rate limited by size. This stops at the first
+    byte past the limit instead.
+    """
+    data = await file.read(_READ_CHUNK)
+    while len(data) <= limit:
+        chunk = await file.read(_READ_CHUNK)
+        if not chunk:
+            break
+        data += chunk
+    if len(data) > limit:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"File exceeds the {limit // (1024 * 1024)} MB limit.",
+        )
+    return data
+
+
+def _assert_is_pdf_bytes(data: bytes) -> None:
+    """Raise 422 unless the content really is a PDF, not just declared as one."""
+    if not data.startswith(_PDF_MAGIC):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="The uploaded file is not a valid PDF.",
+        )
+
+
+def sanitize_title_from_filename(filename: str | None) -> str:
+    """Turn an uploaded filename into a presentable paper title.
+
+    The filename is user input that ends up in the database and in the
+    library view, so it is reduced to something safe and legible rather
+    than trusted: any directory component is dropped, control and
+    zero-width characters are removed, whitespace is collapsed, and the
+    result is length-capped. A name that sanitizes away to nothing
+    becomes a placeholder instead of an empty row.
+    """
+    raw = (filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    raw = _UNSAFE_FILENAME_CHARS.sub("", raw)
+    stem = raw.rsplit(".", 1)[0] if "." in raw else raw
+    # A name that is only dots and separators ("....pdf") leaves nothing
+    # usable behind; lstrip keeps a leading dot from becoming the title.
+    stem = stem.strip(" .")
+    cleaned = " ".join(stem.replace("_", " ").replace("-", " ").split())
+    return cleaned[:255] or "Untitled Paper"
 
 
 # ---------------------------------------------------------------------------
@@ -47,18 +116,16 @@ async def upload_paper_endpoint(
     """Upload a PDF research paper.
 
     - Validates MIME type (must be ``application/pdf``).
-    - Enforces a 50 MB size limit.
+    - Enforces the configured size limit, aborting the read as soon as
+      the file exceeds it.
+    - Confirms the bytes really are a PDF, not just declared as one.
     - Stores the file in Supabase Storage.
     - Creates a ``papers`` row with status ``uploaded``.
     """
     _assert_pdf(file)
 
-    data = await file.read()
-    if len(data) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=f"File exceeds the {MAX_FILE_SIZE // (1024 * 1024)} MB limit.",
-        )
+    data = await _read_capped(file, max_file_size())
+    _assert_is_pdf_bytes(data)
 
     file_id = str(uuid.uuid4())
     storage_path = build_storage_path(str(current_user.id), file_id)
@@ -67,8 +134,7 @@ async def upload_paper_endpoint(
     upload_paper(storage_path, data, file.content_type or "application/pdf")
 
     # Derive a user-friendly title from the filename (strip extension)
-    raw_name = (file.filename or "untitled").rsplit(".", 1)[0].replace("_", " ").replace("-", " ")
-    title = raw_name[:255] if raw_name else "Untitled Paper"
+    title = sanitize_title_from_filename(file.filename)
 
     client = get_supabase_client()
     result = (
@@ -109,17 +175,24 @@ def _ingest_paper(paper_id: str, file_path: str) -> None:
     try:
         pdf_bytes = download_paper(file_path)
     except Exception as exc:  # noqa: BLE001
-        logger.error("Download failed for paper %s: %s", paper_id, exc)
+        logger.error("Download failed for paper %s: %s", paper_id, exc, exc_info=True)
         from app.core.supabase import get_supabase_client as _gsc  # local import avoids cycle
 
+        # Scrubbed before it is stored: error_message is returned by the
+        # paper endpoints, so whatever lands here is user-visible.
         _gsc().table("papers").update(
-            {"status": "failed", "error_message": str(exc)[:2000]}
+            {
+                "status": "failed",
+                "error_message": safe_error_message(
+                    exc, fallback="Could not read the uploaded file."
+                ),
+            }
         ).eq("id", paper_id).execute()
         return
     try:
         run_ingestion(paper_id, pdf_bytes)
     except Exception as exc:  # noqa: BLE001
-        logger.error("Background ingestion error for %s: %s", paper_id, exc)
+        logger.error("Background ingestion error for %s: %s", paper_id, exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------

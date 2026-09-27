@@ -37,23 +37,22 @@ class TestSupabaseClientConfiguration:
         get_supabase_client.cache_clear()
 
     def test_migration_files_exist(self):
-        """Verify all four migration files are present."""
+        """Verify every migration file in the directory is present and non-empty."""
         from pathlib import Path
 
         migrations_dir = Path(__file__).parents[3] / "supabase" / "migrations"
         assert migrations_dir.exists(), f"Migration directory missing: {migrations_dir}"
 
-        expected_files = [
-            "20260923000001_initial_schema.sql",
-            "20260923000002_rls_policies.sql",
-            "20260923000003_storage.sql",
-            "20260923000004_auth_config.sql",
-        ]
+        # Not a fixed list: the point is that whatever is committed is
+        # readable and substantive, so a new migration is covered the
+        # moment it is added rather than after a test edit.
+        files = sorted(migrations_dir.glob("*.sql"))
+        assert files, "no migration files found"
 
-        for filename in expected_files:
-            path = migrations_dir / filename
-            assert path.exists(), f"Migration file missing: {filename}"
-            assert path.stat().st_size > 100, f"Migration file too small (likely empty): {filename}"
+        for path in files:
+            assert (
+                path.stat().st_size > 100
+            ), f"Migration file too small (likely empty): {path.name}"
 
     def test_migration_schema_has_vector_extension(self):
         """Verify the schema migration enables pgvector."""
@@ -89,8 +88,16 @@ class TestSupabaseClientConfiguration:
             assert table in rls_sql, f"Table {table} not mentioned in RLS policies"
 
     def test_storage_migration_has_bucket(self):
-        """Verify the storage migration creates the research-papers bucket."""
+        """The bucket policies must guard the bucket the code writes to.
+
+        Asserting the literal 'research-papers' here is what let a real
+        defect through: the migration guarded that bucket while the
+        application used BUCKET = 'papers', so every policy evaluated
+        against objects the app never created.
+        """
         from pathlib import Path
+
+        from app.core.storage import BUCKET
 
         storage_sql = (
             Path(__file__).parents[3]
@@ -98,6 +105,15 @@ class TestSupabaseClientConfiguration:
             / "migrations"
             / "20260923000003_storage.sql"
         ).read_text()
+        security_sql = (
+            Path(__file__).parents[3]
+            / "supabase"
+            / "migrations"
+            / "20260927000003_security_fixes.sql"
+        ).read_text()
 
-        assert "research-papers" in storage_sql
+        # The original migration provisions the bucket the app uses.
+        assert f"'{BUCKET}'" in storage_sql or f"'{BUCKET}'" in security_sql
+        # The corrective migration repoints the policies at it.
+        assert f"bucket_id = '{BUCKET}'" in security_sql
         assert "application/pdf" in storage_sql

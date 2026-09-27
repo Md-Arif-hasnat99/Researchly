@@ -35,7 +35,7 @@ class TestJWTVerification:
     async def test_dev_token_allowed_when_key_unset(self):
         """When SUPABASE_ANON_KEY is empty and dev-token is sent, return dev user."""
         with patch("app.core.security.get_settings") as mock_settings:
-            mock_settings.return_value = MagicMock(SUPABASE_ANON_KEY="")
+            mock_settings.return_value = MagicMock(SUPABASE_ANON_KEY="", IS_PRODUCTION=False)
             user = await get_current_user(authorization="Bearer dev-token")
         assert user.email == "dev@researchly.local"
         assert "00000000" in str(user.id)

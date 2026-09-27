@@ -50,12 +50,17 @@ def _with_retry(fn: Callable, retries: int = _MAX_RETRIES, base_delay: float = _
     )
 
 
-def _validate_vector(vector: list[float], text_preview: str) -> list[float]:
-    """Assert the vector has the expected dimension."""
+def _validate_vector(vector: list[float]) -> list[float]:
+    """Assert the vector has the expected dimension.
+
+    The offending text is neither needed nor appropriate to echo: this
+    error surfaces as a 422 body, and repeating a preview of the caller's
+    text in a response helps nobody.
+    """
     if len(vector) != EMBEDDING_DIM:
         raise ValueError(
-            f"Expected {EMBEDDING_DIM}-dim vector, got {len(vector)} dims "
-            f"for text starting with: {text_preview[:60]!r}"
+            f"Embedding model returned {len(vector)} dimensions, expected {EMBEDDING_DIM}. "
+            "The embedding model may have changed; check the server configuration."
         )
     return vector
 
@@ -104,7 +109,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = _with_retry(_embed_batch)
 
         for vec, text in zip(vectors, batch):
-            all_vectors.append(_validate_vector(vec, text))
+            all_vectors.append(_validate_vector(vec))
 
         logger.debug(
             "Embedded batch %d–%d (%d vectors)",
@@ -147,4 +152,4 @@ def embed_query(text: str) -> list[float]:
         return list(response.embeddings[0].values)
 
     vector: list[float] = _with_retry(_embed)
-    return _validate_vector(vector, text)
+    return _validate_vector(vector)

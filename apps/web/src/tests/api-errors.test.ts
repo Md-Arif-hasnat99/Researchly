@@ -96,6 +96,20 @@ describe('API error handling', () => {
     expect(err.message).toBe('Bad Gateway');
   });
 
+  it('tells the user how long to wait when the API throttles them', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      mockResponse(429, { error: { code: 'TOO_MANY_REQUESTS', message: 'Too many requests. Please wait a moment before trying again.' } }, {
+        headers: { 'retry-after': '30' },
+      })
+    ));
+
+    const err = await expectApiError(() => listPapers());
+    expect(err.status).toBe(429);
+    expect(err.code).toBe('TOO_MANY_REQUESTS');
+    expect(err.retryAfterSeconds).toBe(30);
+    expect(err.message).toContain('30s');
+  });
+
   it('parses successful responses unchanged', async () => {
     const payload = { papers: [], total: 0 };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(200, payload)));
