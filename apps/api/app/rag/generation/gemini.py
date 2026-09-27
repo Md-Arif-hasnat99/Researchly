@@ -21,6 +21,7 @@ import google.genai as genai
 import google.genai.types as genai_types
 
 from app.core.config import get_settings
+from app.core.retry import with_retry
 from app.schemas.search import SearchResultChunk
 
 logger = logging.getLogger("researchly")
@@ -139,19 +140,22 @@ def generate_answer(
         query[:80],
     )
 
-    response = client.models.generate_content(
-        model=model,
-        contents=[
-            genai_types.Content(
-                role="user",
-                parts=[genai_types.Part(text=prompt)],
-            )
-        ],
-        config=genai_types.GenerateContentConfig(
-            system_instruction=_SYSTEM_PROMPT,
-            temperature=0.2,       # low temperature for factual grounding
-            max_output_tokens=2048,
+    response = with_retry(
+        lambda: client.models.generate_content(
+            model=model,
+            contents=[
+                genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part(text=prompt)],
+                )
+            ],
+            config=genai_types.GenerateContentConfig(
+                system_instruction=_SYSTEM_PROMPT,
+                temperature=0.2,       # low temperature for factual grounding
+                max_output_tokens=2048,
+            ),
         ),
+        label="answer generation",
     )
 
     answer_text: str = response.text or ""

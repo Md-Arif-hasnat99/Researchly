@@ -24,6 +24,30 @@ const API_BASE = import.meta.env.VITE_API_URL as string | undefined ?? 'http://l
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Error raised for any non-2xx response.
+ *
+ * `message` is always populated with something a user can be shown, and
+ * the machine-readable fields are kept for code that needs to branch
+ * (401 meaning the session expired, a 500 that can be retried). For 5xx
+ * responses the message carries the server's `X-Request-ID`, so a user
+ * reporting a failure can quote an id that leads straight to the stack
+ * trace in the logs.
+ */
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  requestId?: string;
+
+  constructor(message: string, status: number, code?: string, requestId?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.requestId = requestId;
+  }
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -33,14 +57,26 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    let detail = res.statusText;
+    // The API emits one error shape, {"error": {"code", "message"}};
+    // "detail" is accepted as well so an older or third-party backend
+    // still yields a readable message rather than a bare status text.
+    let message = res.statusText || `Request failed with status ${res.status}`;
+    let code: string | undefined;
     try {
-      const body = (await res.json()) as { detail?: string };
-      if (body.detail) detail = body.detail;
+      const body = (await res.json()) as {
+        detail?: string;
+        error?: { code?: string; message?: string };
+      };
+      message = body?.error?.message ?? body?.detail ?? message;
+      code = body?.error?.code;
     } catch {
       // ignore JSON parse errors
     }
-    throw new Error(detail);
+    const requestId = res.headers.get('x-request-id') ?? undefined;
+    if (res.status >= 500 && requestId) {
+      message = `${message} (ref: ${requestId})`;
+    }
+    throw new ApiError(message, res.status, code, requestId);
   }
   // 204 No Content
   if (res.status === 204) return undefined as T;

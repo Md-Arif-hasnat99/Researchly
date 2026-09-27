@@ -44,6 +44,7 @@ import google.genai as genai
 import google.genai.types as genai_types
 
 from app.core.config import get_settings
+from app.core.retry import with_retry
 from app.schemas.search import SearchResultChunk
 
 logger = logging.getLogger("researchly")
@@ -307,25 +308,34 @@ def rerank_chunks(
     model = settings.GEMINI_GENERATION_MODEL
 
     try:
-        response = client.models.generate_content(
-            model=model,
-            contents=[
-                genai_types.Content(
-                    role="user",
-                    parts=[genai_types.Part(text=prompt)],
-                )
-            ],
-            config=genai_types.GenerateContentConfig(
-                system_instruction=_SYSTEM_PROMPT,
-                temperature=0.0,
-                max_output_tokens=1024,
-                response_mime_type="application/json",
-                response_schema=_response_schema(),
+        response = with_retry(
+            lambda: client.models.generate_content(
+                model=model,
+                contents=[
+                    genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text=prompt)],
+                    )
+                ],
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                    temperature=0.0,
+                    max_output_tokens=1024,
+                    response_mime_type="application/json",
+                    response_schema=_response_schema(),
+                ),
             ),
+            label="rerank",
+            # One extra attempt only: this runs inside an interactive
+            # search, so the retry budget is bounded by how long a user
+            # will wait, unlike the long-form generation calls.
+            retries=1,
         )
     except Exception as exc:  # noqa: BLE001
         # A reranker is an optimisation; a failed one must not fail the
-        # request. Retrieval already produced a usable ordering.
+        # request. Retrieval already produced a usable ordering. This
+        # path also covers a reranker that is still failing after the
+        # transient retries in app.core.retry are exhausted.
         logger.warning("Rerank call failed, keeping retrieval order: %s", exc)
         return RerankResult(chunks=list(candidates), reranked=False)
 

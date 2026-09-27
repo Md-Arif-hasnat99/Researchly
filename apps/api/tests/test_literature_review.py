@@ -291,7 +291,7 @@ class TestLiteratureReviewErrors:
         )
 
         assert resp.status_code == 404
-        assert "not found" in resp.json()["detail"].lower()
+        assert "not found" in resp.json()["error"]["message"].lower()
 
     @patch("app.api.research.get_supabase_client")
     def test_unindexed_paper_returns_409(self, mock_client_fn, client):
@@ -309,7 +309,7 @@ class TestLiteratureReviewErrors:
 
         assert resp.status_code == 409
         # The 409 message is review-specific, not compare-specific.
-        assert "synthesized" in resp.json()["detail"].lower()
+        assert "synthesized" in resp.json()["error"]["message"].lower()
 
     @patch("app.api.research.similarity_search")
     @patch("app.api.research.get_supabase_client")

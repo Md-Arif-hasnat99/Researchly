@@ -39,6 +39,7 @@ import google.genai as genai
 import google.genai.types as genai_types
 
 from app.core.config import get_settings
+from app.core.retry import with_retry
 from app.schemas.search import SearchResultChunk
 
 logger = logging.getLogger("researchly")
@@ -293,20 +294,23 @@ def judge_metric(
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
     try:
-        response = client.models.generate_content(
-            model=settings.GEMINI_GENERATION_MODEL,
-            contents=[
-                genai_types.Content(
-                    role="user",
-                    parts=[genai_types.Part(text=prompt)],
-                )
-            ],
-            config=genai_types.GenerateContentConfig(
-                temperature=JUDGE_TEMPERATURE,
-                max_output_tokens=1024,
-                response_mime_type="application/json",
-                response_schema=_response_schema(),
+        response = with_retry(
+            lambda: client.models.generate_content(
+                model=settings.GEMINI_GENERATION_MODEL,
+                contents=[
+                    genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text=prompt)],
+                    )
+                ],
+                config=genai_types.GenerateContentConfig(
+                    temperature=JUDGE_TEMPERATURE,
+                    max_output_tokens=1024,
+                    response_mime_type="application/json",
+                    response_schema=_response_schema(),
+                ),
             ),
+            label=f"judge ({metric})",
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Judge call failed for %s: %s", metric, exc)

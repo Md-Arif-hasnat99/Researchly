@@ -39,6 +39,7 @@ import google.genai as genai
 import google.genai.types as genai_types
 
 from app.core.config import get_settings
+from app.core.retry import with_retry
 from app.rag.generation.compare import PaperContext
 from app.schemas.research import (
     ComparePaperRef,
@@ -390,21 +391,24 @@ def identify_research_gaps(
         len(category_list),
     )
 
-    response = client.models.generate_content(
-        model=model,
-        contents=[
-            genai_types.Content(
-                role="user",
-                parts=[genai_types.Part(text=prompt)],
-            )
-        ],
-        config=genai_types.GenerateContentConfig(
-            system_instruction=_SYSTEM_PROMPT,
-            temperature=0.3,
-            max_output_tokens=8192,
-            response_mime_type="application/json",
-            response_schema=_response_schema(category_list),
+    response = with_retry(
+        lambda: client.models.generate_content(
+            model=model,
+            contents=[
+                genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part(text=prompt)],
+                )
+            ],
+            config=genai_types.GenerateContentConfig(
+                system_instruction=_SYSTEM_PROMPT,
+                temperature=0.3,
+                max_output_tokens=8192,
+                response_mime_type="application/json",
+                response_schema=_response_schema(category_list),
+            ),
         ),
+        label="research gap analysis",
     )
 
     clusters, summary = _parse_gaps(response.text or "", usable, category_list)
