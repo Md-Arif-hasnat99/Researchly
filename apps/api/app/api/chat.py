@@ -2,6 +2,7 @@
 
 Endpoints:
     POST   /api/chat                     — ask a question (RAG)
+    POST   /api/chat/stream              — same, streamed as SSE tokens
     GET    /api/conversations            — list user's conversations
     GET    /api/conversations/{id}       — conversation + messages + citations
     DELETE /api/conversations/{id}       — delete conversation
@@ -13,17 +14,25 @@ Flow for POST /api/chat:
     4. Persist the assistant message.
     5. Persist citation rows for each cited chunk.
     6. Return the answer + citations.
+
+POST /api/chat/stream performs the same steps, but retrieval happens
+before the response starts (so failures there are still real HTTP status
+codes) and only generation is streamed, one SSE event at a time.
 """
 
+import json
 import uuid
+from collections.abc import Iterator
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.logging import logger
 from app.core.security import CurrentUser
 from app.core.supabase import get_supabase_client
-from app.rag.pipeline import run_rag
+from app.rag.generation.gemini import stream_answer
+from app.rag.pipeline import RetrievedContext, retrieve_context, run_rag
 from app.schemas.conversation import (
     ConversationDetailResponse,
     ConversationResponse,
@@ -201,8 +210,45 @@ def _persist_citations(
 # ---------------------------------------------------------------------------
 
 
+def _to_citations(chunks) -> list[ChatCitation]:
+    """Map retrieved chunks onto the API's citation shape."""
+    return [
+        ChatCitation(
+            chunk_id=chunk.chunk_id,
+            paper_id=chunk.paper_id,
+            paper_title=chunk.paper_title,
+            page_number=chunk.page_number,
+            section=chunk.section,
+            similarity_score=chunk.similarity_score,
+            content=chunk.content,
+        )
+        for chunk in chunks
+    ]
+
+
+def _raise_retrieval_failure(exc: Exception) -> None:
+    """Translate a retrieval failure into the right HTTP error.
+
+    The RuntimeError text names internal configuration (which env var is
+    missing), so it is logged for the operator and the user gets a message
+    that does not describe the server's wiring.
+    """
+    if isinstance(exc, RuntimeError):
+        logger.error("RAG pipeline config error: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Answer generation is temporarily unavailable. Please try again shortly.",
+        ) from exc
+
+    logger.error("RAG pipeline error: %s", exc, exc_info=True)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Answer generation failed. Please try again.",
+    ) from exc
+
+
 @router.post("/chat", response_model=ChatResponse)
-async def chat(
+def chat(
     request: ChatRequest,
     current_user: CurrentUser,
 ) -> ChatResponse:
@@ -211,6 +257,10 @@ async def chat(
     - Optionally continues an existing conversation.
     - Persists user message, assistant message, and citation rows.
     - Returns the answer with inline citations.
+
+    Sync ``def`` on purpose: retrieval and generation are blocking
+    network calls, and awaiting them inline would block the event loop
+    for every other request. FastAPI threadpools sync handlers.
     """
     user_id = str(current_user.id)
 
@@ -232,21 +282,8 @@ async def chat(
             paper_ids=request.paper_ids,
             rerank=request.rerank,
         )
-    except RuntimeError as exc:
-        # The RuntimeError text names internal configuration (which env
-        # var is missing). Log it for the operator; answer the user with
-        # a message that does not describe the server's wiring.
-        logger.error("RAG pipeline config error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Answer generation is temporarily unavailable. Please try again shortly.",
-        ) from exc
     except Exception as exc:
-        logger.error("RAG pipeline error: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Answer generation failed. Please try again.",
-        ) from exc
+        _raise_retrieval_failure(exc)
 
     # 4. Persist assistant message
     assistant_msg_id = _persist_message(conv_id, "assistant", rag_result.answer)
@@ -255,25 +292,146 @@ async def chat(
     _persist_citations(assistant_msg_id, rag_result.cited_chunks)
 
     # 6. Build response
-    citations = [
-        ChatCitation(
-            chunk_id=chunk.chunk_id,
-            paper_id=chunk.paper_id,
-            paper_title=chunk.paper_title,
-            page_number=chunk.page_number,
-            section=chunk.section,
-            similarity_score=chunk.similarity_score,
-            content=chunk.content,
-        )
-        for chunk in rag_result.cited_chunks
-    ]
-
     return ChatResponse(
         conversation_id=uuid.UUID(conv_id),
         message_id=uuid.UUID(assistant_msg_id),
         answer=rag_result.answer,
-        citations=citations,
+        citations=_to_citations(rag_result.cited_chunks),
         reranked=rag_result.reranked,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/chat/stream
+# ---------------------------------------------------------------------------
+
+
+def _sse(event: str, data: dict) -> bytes:
+    """Serialise one Server-Sent Event frame.
+
+    ``data`` is compact JSON on a single line: a newline inside a data
+    field would terminate the frame early, and ``json.dumps`` never emits
+    a raw newline for a string.
+    """
+    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n".encode()
+
+
+@router.post("/chat/stream")
+def chat_stream(
+    request: ChatRequest,
+    current_user: CurrentUser,
+) -> StreamingResponse:
+    """Ask a question and stream the answer as it is generated.
+
+    Same pipeline and same persisted rows as ``POST /api/chat``; the
+    difference is when the bytes leave. There, the client waits for a
+    complete multi-second answer before showing anything. Here the answer
+    arrives token by token, so the perceived wait is the time to the first
+    token rather than the time to the last one.
+
+    Event sequence:
+
+    * ``citations`` — sent first, from retrieval, so the client can show
+      which sources the answer is being grounded in before any text
+      exists.
+    * ``token``     — one or more, each carrying an increment of text.
+    * ``done``      — the persisted ``message_id`` and ``reranked`` flag.
+    * ``error``     — a failure during generation. The status line is
+      already sent by then, so the failure is reported in-band.
+
+    Everything that can fail *before* the first byte — conversation
+    resolution and retrieval — still runs in the handler, so those
+    failures keep their real HTTP status codes instead of degrading into
+    a 200 with an error event.
+    """
+    user_id = str(current_user.id)
+
+    # 1. Resolve / create conversation, and persist the user message, both
+    #    before the response starts so failures are still HTTP errors.
+    conv_id = _get_or_create_conversation(
+        request.conversation_id, user_id, request.query
+    )
+    _persist_message(conv_id, "user", request.query)
+
+    # 2. Retrieve. Same retrieve/rerank path as the buffered endpoint.
+    try:
+        context: RetrievedContext = retrieve_context(
+            query=request.query,
+            user_id=user_id,
+            top_k=request.top_k,
+            similarity_threshold=request.similarity_threshold,
+            paper_ids=request.paper_ids,
+            rerank=request.rerank,
+        )
+    except Exception as exc:
+        _raise_retrieval_failure(exc)
+
+    citations = _to_citations(context.chunks)
+
+    # 3. Stream generation. A sync generator: Starlette iterates it in a
+    #    threadpool, so the blocking Gemini reads never touch the event
+    #    loop and other requests keep flowing while a stream is open.
+    def event_stream() -> Iterator[bytes]:
+        yield _sse(
+            "citations",
+            # mode="json": paper_id is a UUID, which json.dumps cannot
+            # serialise unless the dump coerces it to a string.
+            {"citations": [c.model_dump(mode="json") for c in citations]},
+        )
+
+        collected: list[str] = []
+        try:
+            for text in stream_answer(query=request.query, chunks=context.chunks):
+                collected.append(text)
+                yield _sse("token", {"text": text})
+        except Exception as exc:  # noqa: BLE001
+            # The status line is long gone, so the error has to travel in
+            # the body. Deliberately generic for the same reason as the
+            # buffered path: the cause is logged, not returned.
+            logger.error("Streaming answer failed: %s", exc, exc_info=True)
+            yield _sse(
+                "error",
+                {
+                    "code": "GENERATION_FAILED",
+                    "message": "Answer generation failed. Please try again.",
+                },
+            )
+            return
+
+        answer = "".join(collected)
+        try:
+            assistant_msg_id = _persist_message(conv_id, "assistant", answer)
+            _persist_citations(assistant_msg_id, context.chunks)
+        except Exception as exc:  # noqa: BLE001
+            # The text already reached the client, so the answer is not
+            # lost from their side, but it will not be in the history.
+            # Surfaced in-band so the UI can say so rather than showing a
+            # response that silently fails to persist.
+            logger.error("Failed to persist streamed answer: %s", exc, exc_info=True)
+            yield _sse(
+                "error",
+                {
+                    "code": "PERSIST_FAILED",
+                    "message": "The answer was generated but could not be saved to history.",
+                },
+            )
+            return
+
+        yield _sse(
+            "done",
+            {"message_id": assistant_msg_id, "reranked": context.reranked},
+        )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            # Nginx and similar proxies buffer responses by default, which
+            # would hold the whole answer back and defeat the point.
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -283,7 +441,7 @@ async def chat(
 
 
 @router.get("/conversations", response_model=ConversationListResponse)
-async def list_conversations(current_user: CurrentUser) -> ConversationListResponse:
+def list_conversations(current_user: CurrentUser) -> ConversationListResponse:
     """Return all conversations for the authenticated user, newest first."""
     client = get_supabase_client()
     result = (
@@ -306,7 +464,7 @@ async def list_conversations(current_user: CurrentUser) -> ConversationListRespo
     "/conversations/{conversation_id}",
     response_model=ConversationDetailResponse,
 )
-async def get_conversation(
+def get_conversation(
     conversation_id: str,
     current_user: CurrentUser,
 ) -> ConversationDetailResponse:
@@ -367,7 +525,7 @@ async def get_conversation(
     "/conversations/{conversation_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_conversation(
+def delete_conversation(
     conversation_id: str,
     current_user: CurrentUser,
 ) -> None:

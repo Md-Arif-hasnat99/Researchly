@@ -83,20 +83,33 @@ def run_ingestion(paper_id: str, pdf_bytes: bytes) -> int:
             _update_paper_status(paper_id, "ready", total_pages=total_pages)
             return 0
 
-        # 3. Delete any existing chunks so re-ingestion replaces prior results.
-        get_supabase_client().table("paper_chunks").delete().eq(
-            "paper_id", paper_id
-        ).execute()
-        logger.debug("Cleared existing chunks for paper %s", paper_id)
-
-        # 4. Generate embeddings for all chunks
+        # 3. Generate embeddings for all chunks *before* touching the stored
+        #    data. Previously the old chunks were deleted first, so any
+        #    failure in step 4 (bad API key, quota, a transient 5xx) left the
+        #    paper with no chunks at all — a re-ingestion that made things
+        #    worse. Now the expensive, failure-prone step happens while the
+        #    previous results are still intact.
         texts_to_embed = [chunk.content for chunk in chunks]
-        embeddings = []
         try:
             embeddings = embed_texts(texts_to_embed)
         except Exception as exc:
             logger.error("Failed to generate embeddings for paper %s: %s", paper_id, exc)
             raise RuntimeError(f"Embedding generation failed: {exc}") from exc
+
+        if len(embeddings) != len(chunks):
+            # embed_texts already refuses a short batch, so reaching this
+            # means the contract itself changed. Fail rather than write a
+            # paper whose chunks and vectors no longer correspond.
+            raise RuntimeError(
+                f"Embedding count mismatch for paper {paper_id}: "
+                f"{len(embeddings)} embeddings for {len(chunks)} chunks"
+            )
+
+        # 4. Replace the previous chunks now that the replacements are ready.
+        get_supabase_client().table("paper_chunks").delete().eq(
+            "paper_id", paper_id
+        ).execute()
+        logger.debug("Cleared existing chunks for paper %s", paper_id)
 
         # 5. Persist new chunks with their embeddings
         chunks_payload = [

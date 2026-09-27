@@ -15,6 +15,8 @@ persist ``citations`` rows.
 """
 
 import logging
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import google.genai as genai
@@ -25,6 +27,11 @@ from app.core.retry import with_retry
 from app.schemas.search import SearchResultChunk
 
 logger = logging.getLogger("researchly")
+
+# Retry configuration for the streaming path, which retries only while no
+# output has been emitted (see stream_answer).
+_MAX_RETRIES = 3
+_BASE_DELAY_S = 1.0
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -86,6 +93,30 @@ def _build_prompt(query: str, context_block: str) -> str:
     )
 
 
+_NO_CONTEXT_ANSWER = (
+    "I could not find information about this in the provided papers. "
+    "Please try uploading relevant papers or rephrasing your question."
+)
+
+
+def _generation_config() -> genai_types.GenerateContentConfig:
+    """The generation config shared by the buffered and streaming paths."""
+    return genai_types.GenerateContentConfig(
+        system_instruction=_SYSTEM_PROMPT,
+        temperature=0.2,       # low temperature for factual grounding
+        max_output_tokens=2048,
+    )
+
+
+def _require_api_key() -> None:
+    settings = get_settings()
+    if not settings.GEMINI_API_KEY:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not configured. "
+            "Set it in your .env file to enable answer generation."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -110,26 +141,19 @@ def generate_answer(
         RuntimeError: If GEMINI_API_KEY is not configured.
         Exception:    Propagated from the Gemini SDK on API failure.
     """
-    settings = get_settings()
-    if not settings.GEMINI_API_KEY:
-        raise RuntimeError(
-            "GEMINI_API_KEY is not configured. "
-            "Set it in your .env file to enable answer generation."
-        )
-
+    # Answered before the key check for the same reason as the streaming
+    # path: this response never reaches Gemini, so it must not depend on
+    # a key being configured.
     if not chunks:
         logger.info("No context chunks — returning fallback answer.")
-        return GeneratedAnswer(
-            answer=(
-                "I could not find information about this in the provided papers. "
-                "Please try uploading relevant papers or rephrasing your question."
-            ),
-            cited_chunks=[],
-        )
+        return GeneratedAnswer(answer=_NO_CONTEXT_ANSWER, cited_chunks=[])
+
+    _require_api_key()
 
     context_block = _build_context_block(chunks)
     prompt = _build_prompt(query, context_block)
 
+    settings = get_settings()
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     model = settings.GEMINI_GENERATION_MODEL
 
@@ -149,11 +173,7 @@ def generate_answer(
                     parts=[genai_types.Part(text=prompt)],
                 )
             ],
-            config=genai_types.GenerateContentConfig(
-                system_instruction=_SYSTEM_PROMPT,
-                temperature=0.2,       # low temperature for factual grounding
-                max_output_tokens=2048,
-            ),
+            config=_generation_config(),
         ),
         label="answer generation",
     )
@@ -162,3 +182,93 @@ def generate_answer(
     logger.info("Generation complete — %d chars", len(answer_text))
 
     return GeneratedAnswer(answer=answer_text, cited_chunks=chunks)
+
+
+def stream_answer(
+    query: str,
+    chunks: list[SearchResultChunk],
+) -> Iterator[str]:
+    """Generate a grounded answer, yielding text as the model produces it.
+
+    Yields the same text :func:`generate_answer` would have returned
+    whole, but incrementally, so the caller can show the first tokens
+    while Gemini is still writing the rest.
+
+    Retry policy differs from the buffered path on purpose. A stream that
+    has already emitted text cannot be safely restarted — the client has
+    the first half of the answer, and replaying it would duplicate
+    output. So a failure is retried only while nothing has been yielded
+    yet; after that the error is raised to the caller, which ends the
+    stream.
+
+    Args:
+        query:  The user's natural-language question.
+        chunks: Retrieved chunks, already ordered by similarity descending.
+
+    Yields:
+        Successive pieces of the answer text. May yield "" (never) — a
+        chunk with no text contributes nothing and is skipped.
+
+    Raises:
+        RuntimeError: If GEMINI_API_KEY is not configured.
+        Exception:    Propagated from the Gemini SDK on failure.
+    """
+    # No context is a complete, known answer, and it needs no model — so
+    # it is answered before the API key is checked. Otherwise a user with
+    # nothing indexed (or nothing matching) gets a 503 for a question
+    # that was never going to reach Gemini.
+    if not chunks:
+        logger.info("No context chunks — returning fallback answer.")
+        yield _NO_CONTEXT_ANSWER
+        return
+
+    _require_api_key()
+
+    context_block = _build_context_block(chunks)
+    prompt = _build_prompt(query, context_block)
+
+    settings = get_settings()
+    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    model = settings.GEMINI_GENERATION_MODEL
+
+    logger.info(
+        "Streaming answer | model=%s chunks=%d query=%r", model, len(chunks), query[:80]
+    )
+
+    attempt = 0
+    while True:
+        emitted = False
+        try:
+            for part in client.models.generate_content_stream(
+                model=model,
+                contents=[
+                    genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text=prompt)],
+                    )
+                ],
+                config=_generation_config(),
+            ):
+                text = getattr(part, "text", None)
+                if text:
+                    emitted = True
+                    yield text
+            logger.info("Stream complete")
+            return
+        except Exception as exc:  # noqa: BLE001
+            if emitted or attempt >= _MAX_RETRIES:
+                # Either the client already has part of the answer, or we
+                # are out of attempts. Re-raising ends the stream with a
+                # real error instead of silently truncating the answer.
+                logger.error("Answer stream failed after output began: %s", exc)
+                raise
+            attempt += 1
+            delay = _BASE_DELAY_S * (2 ** (attempt - 1))
+            logger.warning(
+                "Stream failed before any output (attempt %d/%d), retrying in %.1fs: %s",
+                attempt,
+                _MAX_RETRIES,
+                delay,
+                exc,
+            )
+            time.sleep(delay)

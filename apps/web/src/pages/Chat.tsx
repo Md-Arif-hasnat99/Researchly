@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { Send, FileText, MessageSquare, Plus, Trash2, Loader2, Sparkles } from 'lucide-react';
-import { listConversations, getConversation, askQuestion, deleteConversation, listPapers } from '../lib/api';
+import { listConversations, getConversation, streamQuestion, deleteConversation, listPapers } from '../lib/api';
 import { PaperScopeSelector } from '../components/chat/PaperScopeSelector';
 import type { Conversation, Message, ChatCitation } from '../types/chat';
 import type { Paper } from '../types/paper';
@@ -119,46 +119,73 @@ export const Chat: React.FC = () => {
     setMessages((prev) => [...prev, newUserMsg]);
     setIsLoading(true);
 
+    // A placeholder assistant message that tokens are appended into, so the
+    // answer appears as it is written instead of after a multi-second wait.
+    const tempAssistantId = `temp-assistant-${Date.now()}`;
+    let answerSoFar = '';
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: tempAssistantId,
+        conversation_id: conversationId || '',
+        role: 'assistant',
+        content: '',
+        created_at: new Date().toISOString(),
+        citations: [],
+      },
+    ]);
+
+    const appendToAnswer = (text: string) => {
+      answerSoFar += text;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === tempAssistantId ? { ...m, content: answerSoFar } : m)),
+      );
+    };
+
     try {
-      const res = await askQuestion(query, conversationId, scopedPaperIds, rerank);
-      
+      const res = await streamQuestion(query, conversationId, scopedPaperIds, rerank, {
+        onToken: appendToAnswer,
+        onCitations: (citations) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === tempAssistantId ? { ...m, citations } : m)),
+          );
+        },
+      });
+
       if (!conversationId) {
         // If it was a new conversation, navigate to the new URL
         // We'll also refresh the conversation list to show it
         fetchConversations();
         navigate(`/chat/${res.conversation_id}`, { replace: true });
-        
-        // Ensure the temporary message has the real conversation_id before appending assistant msg
-        setMessages([
-          { ...newUserMsg, conversation_id: res.conversation_id },
-          {
-            id: res.message_id,
-            conversation_id: res.conversation_id,
-            role: 'assistant',
-            content: res.answer,
-            created_at: new Date().toISOString(),
-            citations: res.citations,
-            reranked: res.reranked,
-          }
-        ]);
-      } else {
-        // Append assistant message
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: res.message_id,
-            conversation_id: res.conversation_id,
-            role: 'assistant',
-            content: res.answer,
-            created_at: new Date().toISOString(),
-            citations: res.citations,
-            reranked: res.reranked,
-          }
-        ]);
+      }
+
+      // Replace the streaming placeholder with the persisted message.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempAssistantId
+            ? {
+                ...m,
+                id: res.message_id,
+                conversation_id: res.conversation_id,
+                content: res.answer || answerSoFar,
+                citations: res.citations,
+                reranked: res.reranked,
+              }
+            : m,
+        ),
+      );
+
+      if (!conversationId) {
+        // The optimistic messages were created before the conversation
+        // existed, so their conversation_id is still a placeholder.
+        setMessages((prev) =>
+          prev.map((m) => ({ ...m, conversation_id: res.conversation_id })),
+        );
       }
     } catch (err) {
       console.error('Failed to ask question:', err);
-      // Optional: Add error toast here
+      // Drop the empty placeholder; a failed request has no answer to show.
+      setMessages((prev) => prev.filter((m) => m.id !== tempAssistantId));
     } finally {
       setIsLoading(false);
     }

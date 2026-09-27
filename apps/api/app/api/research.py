@@ -19,6 +19,7 @@ from supabase import Client
 from app.core.logging import logger
 from app.core.security import CurrentUser
 from app.core.supabase import get_supabase_client
+from app.rag.embeddings.gemini import embed_query
 from app.rag.generation.compare import PaperContext, generate_comparison
 from app.rag.generation.gaps import identify_research_gaps
 from app.rag.generation.literature_review import generate_literature_review
@@ -101,9 +102,12 @@ def _build_contexts(
     exactly one paper's chunks.
     """
     contexts: list[PaperContext] = []
-    # The retrieval query steers which chunks each paper contributes. The
-    # focus string (or a caller-supplied default) is embedded per paper.
+    # The retrieval query steers which chunks each paper contributes. It is
+    # the same string for every paper, so it is embedded once here and the
+    # vector reused: previously each paper's search re-embedded it, making a
+    # six-paper comparison pay for six identical Gemini round-trips.
     query = focus or default_query
+    query_vector = embed_query(query)
 
     for paper_id, row in papers.items():
         try:
@@ -113,6 +117,7 @@ def _build_contexts(
                 top_k=per_paper_top_k,
                 similarity_threshold=0.0,
                 paper_ids=[paper_id],
+                query_vector=query_vector,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Retrieval failed for paper %s: %s", paper_id, exc)
@@ -158,7 +163,7 @@ _GAP_QUERY = (
 
 
 @router.post("/compare", response_model=CompareResponse)
-async def compare_papers(
+def compare_papers(
     request: CompareRequest,
     current_user: CurrentUser,
 ) -> CompareResponse:
@@ -167,6 +172,10 @@ async def compare_papers(
     Returns a matrix with one row per aspect and one cell per paper. Each
     cell carries the reported value (or ``not_reported``) plus the page and
     chunk it came from, so every factual claim stays traceable to a source.
+
+    Sync ``def`` on purpose: retrieval and generation are blocking network
+    calls; awaiting them inline would block the event loop for every other
+    request. FastAPI threadpools sync handlers.
     """
     user_id = str(current_user.id)
     client = get_supabase_client()
@@ -240,7 +249,7 @@ async def compare_papers(
 
 
 @router.post("/literature-review", response_model=LiteratureReviewResponse)
-async def generate_review(
+def generate_review(
     request: LiteratureReviewRequest,
     current_user: CurrentUser,
 ) -> LiteratureReviewResponse:
@@ -323,7 +332,7 @@ async def generate_review(
 
 
 @router.post("/gaps", response_model=GapResponse)
-async def find_gaps(
+def find_gaps(
     request: GapRequest,
     current_user: CurrentUser,
 ) -> GapResponse:
