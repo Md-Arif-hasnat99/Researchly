@@ -51,7 +51,7 @@ async def test_upload_rejects_non_pdf():
             files={"file": ("report.txt", b"hello world", "text/plain")},
         )
     assert response.status_code == 422
-    assert "PDF" in response.json()["detail"]
+    assert "PDF" in response.json()["error"]["message"]
 
 
 @pytest.mark.asyncio

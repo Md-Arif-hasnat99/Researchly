@@ -1,6 +1,21 @@
 import logging
 import sys
 
+from app.core.request_context import get_request_id
+
+
+class RequestIdFilter(logging.Filter):
+    """Put the current request id on every record this handler emits.
+
+    Records logged outside a request (startup, background tasks) get
+    ``-`` rather than being treated as a different kind of line, so the
+    field is always present and always in the same place.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = get_request_id()
+        return True
+
 
 class SafeStream:
     """Text stream that degrades unencodable characters instead of raising.
@@ -56,8 +71,9 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
     if not logger.handlers:
         handler = logging.StreamHandler(SafeStream(sys.stdout))
         handler.setLevel(getattr(logging, level.upper(), logging.INFO))
+        handler.addFilter(RequestIdFilter())
         formatter = logging.Formatter(
-            fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            fmt="%(asctime)s [%(levelname)s] %(name)s [%(request_id)s]: %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
         handler.setFormatter(formatter)

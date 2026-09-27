@@ -11,13 +11,13 @@ Features:
 """
 
 import logging
-import time
 from collections.abc import Callable
 
 import google.genai as genai
 import google.genai.types as genai_types
 
 from app.core.config import get_settings
+from app.core.retry import with_retry
 
 logger = logging.getLogger("researchly")
 
@@ -27,7 +27,7 @@ EMBEDDING_DIM = 768
 # Gemini API batch limit for embedContent (content items per request)
 _BATCH_SIZE = 100
 
-# Retry configuration
+# Retry configuration (see app.core.retry for what counts as transient)
 _MAX_RETRIES = 3
 _BASE_DELAY_S = 1.0  # seconds; doubled on each retry
 
@@ -39,28 +39,15 @@ def _get_client() -> genai.Client:
 
 
 def _with_retry(fn: Callable, retries: int = _MAX_RETRIES, base_delay: float = _BASE_DELAY_S):
-    """Call *fn()* with exponential-backoff retry on exception.
+    """Call *fn()* with exponential-backoff retry on transient failures.
 
-    Raises the last exception if all retries are exhausted.
+    Raises the last exception if all retries are exhausted, or
+    immediately when the failure cannot succeed on a retry (a bad API
+    key, a rejected payload).
     """
-    delay = base_delay
-    last_exc: Exception | None = None
-    for attempt in range(retries + 1):
-        try:
-            return fn()
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            if attempt < retries:
-                logger.warning(
-                    "Embedding attempt %d/%d failed (%s). Retrying in %.1fs…",
-                    attempt + 1,
-                    retries,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-                delay *= 2
-    raise last_exc  # type: ignore[misc]
+    return with_retry(
+        fn, retries=retries, base_delay=base_delay, label="embedding request"
+    )
 
 
 def _validate_vector(vector: list[float], text_preview: str) -> list[float]:

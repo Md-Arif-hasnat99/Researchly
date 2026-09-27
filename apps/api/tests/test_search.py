@@ -934,4 +934,4 @@ class TestSearchModeDispatch:
         )
 
         assert resp.status_code == 500
-        assert "connection pool" not in resp.json()["detail"]
+        assert "connection pool" not in resp.json()["error"]["message"]
