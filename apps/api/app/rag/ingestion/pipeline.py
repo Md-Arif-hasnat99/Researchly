@@ -12,6 +12,7 @@ Status transitions::
 
 import logging
 
+from app.core.errors import safe_error_message
 from app.core.supabase import get_supabase_client
 from app.rag.embeddings.gemini import embed_texts
 from app.rag.ingestion.chunker import chunk_pages
@@ -123,5 +124,14 @@ def run_ingestion(paper_id: str, pdf_bytes: bytes) -> int:
 
     except Exception as exc:  # noqa: BLE001
         logger.error("Ingestion failed for paper %s: %s", paper_id, exc, exc_info=True)
-        _update_paper_status(paper_id, "failed", error_message=str(exc))
+        # Scrubbed: this text is stored on the paper row and shown in the
+        # library view, and a parse failure on an untrusted PDF is not
+        # something to render verbatim.
+        _update_paper_status(
+            paper_id,
+            "failed",
+            error_message=safe_error_message(
+                exc, fallback="The file could not be processed as a PDF."
+            ),
+        )
         return 0

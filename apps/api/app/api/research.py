@@ -201,10 +201,10 @@ async def compare_papers(
             focus=request.focus,
         )
     except RuntimeError as exc:
-        logger.error("Comparison config error: %s", exc)
+        logger.error("Comparison config error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+            detail="Comparison generation is temporarily unavailable. Please try again shortly.",
         ) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -284,10 +284,13 @@ async def generate_review(
             focus=request.focus,
         )
     except RuntimeError as exc:
-        logger.error("Literature review config error: %s", exc)
+        logger.error("Literature review config error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+            detail=(
+                "Literature review generation is temporarily unavailable. "
+                "Please try again shortly."
+            ),
         ) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -363,10 +366,10 @@ async def find_gaps(
             focus=request.focus,
         )
     except RuntimeError as exc:
-        logger.error("Gap analysis config error: %s", exc)
+        logger.error("Gap analysis config error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+            detail="Gap analysis is temporarily unavailable. Please try again shortly.",
         ) from exc
     except ValueError as exc:
         raise HTTPException(

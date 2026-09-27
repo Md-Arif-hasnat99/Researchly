@@ -43,8 +43,19 @@ async def get_current_user(
     settings = get_settings()
     token = _extract_token(authorization)
 
-    # Development bypass: if credentials are not configured, permit a dev token
+    # Development bypass: when no credentials are configured, permit a
+    # dev token so the app is usable before Supabase is wired up. Gated on
+    # ENVIRONMENT as well as on the missing key, because a production
+    # deployment that ships with an empty SUPABASE_ANON_KEY would
+    # otherwise hand a fixed identity to anyone sending `dev-token` —
+    # and a missing key is exactly the mistake that reaches production.
     if not settings.SUPABASE_ANON_KEY and token == "dev-token":
+        if settings.IS_PRODUCTION:
+            logger.error(
+                "Refusing the dev-token auth bypass: ENVIRONMENT is production. "
+                "Set SUPABASE_ANON_KEY."
+            )
+            raise CREDENTIALS_EXCEPTION
         return UserProfile(
             id="00000000-0000-0000-0000-000000000000",
             email="dev@researchly.local",

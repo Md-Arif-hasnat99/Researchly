@@ -120,11 +120,13 @@ async def search_papers(
             results = rerank_result.chunks
             reranked = rerank_result.reranked
     except RuntimeError as exc:
-        # Gemini API key not configured
-        logger.error("Search failed — configuration error: %s", exc)
+        # Usually "GEMINI_API_KEY is not configured" — an internal config
+        # detail. Log the cause; give the user a plain availability
+        # message.
+        logger.error("Search failed — configuration error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+            detail="Search is temporarily unavailable. Please try again shortly.",
         ) from exc
     except Exception as exc:
         logger.error("Search failed: %s", exc, exc_info=True)

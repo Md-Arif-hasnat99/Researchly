@@ -15,6 +15,7 @@ from app.api.search import router as search_router
 from app.core.config import get_settings
 from app.core.logging import logger
 from app.core.middleware import RequestLoggingMiddleware
+from app.core.rate_limit import RateLimitMiddleware
 
 #: Machine-readable codes for the HTTP statuses the API raises itself.
 #: Routes pass a code when it is more specific than the status default.
@@ -65,21 +66,33 @@ def create_application() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS Middleware
+    # Middleware, added inner to outer (the last one added is the
+    # outermost). The order is deliberate:
+    #
+    #   CORS (outermost)  adds its headers to every response, including
+    #                     the 429 and 500 the inner layers produce
+    #   RequestLogging    sees every request, including ones the limiter
+    #                     rejects, and attaches the request id
+    #   RateLimit (inner) meters only requests that are real API calls
+    #
+    # Rate limit is innermost so health probes and CORS preflights (both
+    # handled before reaching it) are never charged against a budget.
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        # Let the browser read the correlation id so a failed request can
-        # be reported with it.
-        expose_headers=["X-Request-ID"],
+        # Explicit rather than "*": the API is a fixed set of verbs, and
+        # a wildcard here widens what a compromised browser context may
+        # attempt. CORS_ORIGINS is validated in production to reject "*".
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        # Let the browser read the correlation id and the backoff hints so
+        # a failed or throttled request can be reported or retried.
+        expose_headers=["X-Request-ID", "Retry-After", "X-RateLimit-Remaining"],
+        max_age=600,
     )
-
-    # Request id + one log line per request (added last: outermost, so it
-    # also sees requests that fail before reaching a route).
-    app.add_middleware(RequestLoggingMiddleware)
 
     # Registered against Starlette's class, not FastAPI's subclass, so
     # one handler covers both: routes raise fastapi.HTTPException, while

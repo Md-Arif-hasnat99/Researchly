@@ -63,7 +63,7 @@ class TestGeminiEmbeddings:
 
         mock_client.models.embed_content.return_value = mock_response
 
-        with pytest.raises(ValueError, match="Expected 768-dim vector"):
+        with pytest.raises(ValueError, match="100 dimensions, expected 768"):
             embed_texts(["hello"])
 
     @patch("app.rag.embeddings.gemini.get_settings")
