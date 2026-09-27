@@ -100,13 +100,15 @@ export async function deletePaper(id: string): Promise<void> {
 export async function askQuestion(
   query: string,
   conversation_id?: string,
-  paper_ids?: string[]
+  paper_ids?: string[],
+  rerank?: boolean
 ): Promise<ChatResponse> {
   const headers = await getAuthHeaders();
   headers['Content-Type'] = 'application/json';
-  const body: Record<string, string | number | string[] | undefined> = { query };
+  const body: Record<string, string | number | string[] | boolean | undefined> = { query };
   if (conversation_id) body.conversation_id = conversation_id;
   if (paper_ids && paper_ids.length > 0) body.paper_ids = paper_ids;
+  if (rerank !== undefined) body.rerank = rerank;
 
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',

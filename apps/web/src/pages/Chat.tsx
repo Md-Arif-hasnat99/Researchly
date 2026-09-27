@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
-import { Send, FileText, MessageSquare, Plus, Trash2, Loader2 } from 'lucide-react';
+import { Send, FileText, MessageSquare, Plus, Trash2, Loader2, Sparkles } from 'lucide-react';
 import { listConversations, getConversation, askQuestion, deleteConversation, listPapers } from '../lib/api';
 import { PaperScopeSelector } from '../components/chat/PaperScopeSelector';
 import type { Conversation, Message, ChatCitation } from '../types/chat';
@@ -10,6 +10,8 @@ import type { Paper } from '../types/paper';
 // Extended message type for frontend to support inline citations from the POST response
 interface ChatMessage extends Message {
   citations?: ChatCitation[];
+  /** Whether this answer's context was reranked before generation (FR-15). */
+  reranked?: boolean;
 }
 
 export const Chat: React.FC = () => {
@@ -23,6 +25,9 @@ export const Chat: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [papers, setPapers] = useState<Paper[]>([]);
   const [scopedPaperIds, setScopedPaperIds] = useState<string[]>([]);
+  // Off by default: reranking adds a model round-trip to every turn, so it
+  // is something a user opts into rather than pays for silently.
+  const [rerank, setRerank] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -115,7 +120,7 @@ export const Chat: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const res = await askQuestion(query, conversationId, scopedPaperIds);
+      const res = await askQuestion(query, conversationId, scopedPaperIds, rerank);
       
       if (!conversationId) {
         // If it was a new conversation, navigate to the new URL
@@ -133,6 +138,7 @@ export const Chat: React.FC = () => {
             content: res.answer,
             created_at: new Date().toISOString(),
             citations: res.citations,
+            reranked: res.reranked,
           }
         ]);
       } else {
@@ -146,6 +152,7 @@ export const Chat: React.FC = () => {
             content: res.answer,
             created_at: new Date().toISOString(),
             citations: res.citations,
+            reranked: res.reranked,
           }
         ]);
       }
@@ -252,6 +259,16 @@ export const Chat: React.FC = () => {
                 {m.content}
               </div>
 
+              {m.reranked && (
+                <div
+                  className="flex items-center gap-1.5 mt-1.5 text-[11px] text-text-muted"
+                  data-testid="message-reranked"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>Sources re-ranked by relevance</span>
+                </div>
+              )}
+
               {/* Citations section if assistant and citations exist */}
               {m.citations && m.citations.length > 0 && (
                 <div className="mt-2.5 space-y-1.5 max-w-2xl w-full">
@@ -304,6 +321,22 @@ export const Chat: React.FC = () => {
             onToggle={toggleScope}
             disabled={isLoading}
           />
+          <div className="px-4 pt-1">
+            <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rerank}
+                onChange={(e) => setRerank(e.target.checked)}
+                disabled={isLoading}
+                className="h-3.5 w-3.5 rounded border-border text-accent focus:ring-accent disabled:opacity-50"
+                data-testid="chat-rerank-toggle"
+              />
+              <span>AI rerank sources</span>
+              <span className="text-text-muted/70">
+                &mdash; more accurate, slower
+              </span>
+            </label>
+          </div>
           <div className="p-4 pt-1">
             <form onSubmit={handleSendMessage} className="flex items-center gap-2">
               <input

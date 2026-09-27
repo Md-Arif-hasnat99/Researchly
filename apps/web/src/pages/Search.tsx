@@ -164,6 +164,7 @@ export const Search: React.FC = () => {
 
   const [query, setQuery] = useState(searchParams.get('q') ?? '');
   const [mode, setMode] = useState<SearchMode>('hybrid');
+  const [rerank, setRerank] = useState(true);
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -172,23 +173,33 @@ export const Search: React.FC = () => {
   // is not then re-run by the URL effect below.
   const lastRun = useRef<string | null>(null);
 
-  const runSearch = useCallback(async (searchQuery: string, searchMode: SearchMode) => {
-    const trimmed = searchQuery.trim();
-    if (!trimmed) return;
-    lastRun.current = trimmed;
-    setIsSearching(true);
-    setError(null);
-    try {
-      setResult(
-        await searchPapers({ query: trimmed, mode: searchMode, top_k: DEFAULT_TOP_K })
-      );
-    } catch (err) {
-      setResult(null);
-      setError(err instanceof Error ? err.message : 'Search failed.');
-    } finally {
-      setIsSearching(false);
-    }
-  }, []);
+  const runSearch = useCallback(
+    async (searchQuery: string, searchMode: SearchMode, doRerank: boolean) => {
+      const trimmed = searchQuery.trim();
+      if (!trimmed) return;
+      lastRun.current = trimmed;
+      setIsSearching(true);
+      setError(null);
+      try {
+        setResult(
+          await searchPapers({
+            query: trimmed,
+            mode: searchMode,
+            top_k: DEFAULT_TOP_K,
+            // Keyword search is exact already and needs no AI key, so the
+            // toggle is meaningless there; let the server skip it too.
+            rerank: searchMode === 'keyword' ? false : doRerank,
+          })
+        );
+      } catch (err) {
+        setResult(null);
+        setError(err instanceof Error ? err.message : 'Search failed.');
+      } finally {
+        setIsSearching(false);
+      }
+    },
+    []
+  );
 
   // A query arriving from the header search box runs on arrival.
   // Deliberately keyed on the URL only: including `query` or `mode` would
@@ -197,7 +208,7 @@ export const Search: React.FC = () => {
     const fromUrl = searchParams.get('q');
     if (fromUrl && fromUrl !== lastRun.current) {
       setQuery(fromUrl);
-      void runSearch(fromUrl, mode);
+      void runSearch(fromUrl, mode, rerank);
     }
   }, [searchParams, runSearch]);
 
@@ -207,13 +218,18 @@ export const Search: React.FC = () => {
     if (!trimmed) return;
     // Keep the query shareable in the URL.
     setSearchParams({ q: trimmed }, { replace: true });
-    void runSearch(trimmed, mode);
+    void runSearch(trimmed, mode, rerank);
   };
 
   const activeMode = MODE_OPTIONS.find((m) => m.value === mode)!;
   // A hybrid request answered with mode=vector means keyword search was
   // unavailable; saying so beats silently showing thinner results.
   const degraded = result !== null && result.mode === 'vector' && mode === 'hybrid';
+  const rerankApplicable = mode !== 'keyword';
+  // Only claim a rerank that actually happened. Requesting one is not the
+  // same as getting one: the server skips it without an API key, and falls
+  // back to the retrieval order if the model call fails.
+  const reranked = result !== null && result.reranked;
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -279,6 +295,32 @@ export const Search: React.FC = () => {
             </p>
           </div>
 
+          {/* Rerank */}
+          <div className="flex items-start gap-3 pt-1">
+            <input
+              id="rerank-toggle"
+              type="checkbox"
+              checked={rerank}
+              disabled={!rerankApplicable}
+              onChange={(e) => setRerank(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-border text-accent focus:ring-accent disabled:opacity-50"
+              data-testid="rerank-toggle"
+            />
+            <div>
+              <label
+                htmlFor="rerank-toggle"
+                className="text-sm font-medium text-text-primary cursor-pointer"
+              >
+                AI rerank
+              </label>
+              <p className="text-xs text-text-muted" data-testid="rerank-hint">
+                {rerankApplicable
+                  ? 'Retrieve deeper, then let the model re-order candidates by real relevance before showing results. Slower, more accurate.'
+                  : 'Not available in keyword mode — literal matching is already exact.'}
+              </p>
+            </div>
+          </div>
+
           <Button
             type="submit"
             variant="primary"
@@ -328,6 +370,16 @@ export const Search: React.FC = () => {
             </h2>
             <span className="text-xs text-text-muted">{MODE_LABELS[result.mode]}</span>
           </div>
+
+          {reranked && (
+            <div
+              className="flex items-center gap-2 text-xs text-text-muted"
+              data-testid="rerank-applied"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Re-ranked by relevance</span>
+            </div>
+          )}
 
           {degraded && (
             <div

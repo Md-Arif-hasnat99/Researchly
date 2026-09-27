@@ -81,8 +81,13 @@ class SearchOutcome:
 # ---------------------------------------------------------------------------
 
 
-def _candidate_depth(top_k: int) -> int:
-    """Per-retriever candidate depth for a requested result count."""
+def candidate_depth(top_k: int) -> int:
+    """Per-retriever candidate depth for a requested result count.
+
+    Retrievers fetch deeper than the caller needs so that a chunk one of
+    them placed 15th can still win fusion — or, once FR-15 reranking is
+    in play, so a reranker has a real choice to make.
+    """
     return min(MAX_CANDIDATES, max(top_k, top_k * CANDIDATE_MULTIPLIER))
 
 
@@ -356,7 +361,7 @@ def hybrid_search(
     caller is told which retriever actually ran.
     """
     _log_query(query, user_id, top_k, "hybrid", paper_ids)
-    depth = _candidate_depth(top_k)
+    depth = candidate_depth(top_k)
 
     # A vector failure (missing API key, database down) is not something
     # to paper over — it propagates so the API can report it.

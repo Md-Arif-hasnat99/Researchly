@@ -1,4 +1,4 @@
-/** Search API contracts (FR-06 semantic search, FR-14 hybrid search). */
+/** Search API contracts (FR-06 semantic search, FR-14 hybrid search, FR-15 reranking). */
 
 export type SearchMode = 'vector' | 'keyword' | 'hybrid';
 
@@ -17,6 +17,12 @@ export interface SearchRequest {
   similarity_threshold?: number;
   /** Defaults to `hybrid` on the server. */
   mode?: SearchMode;
+  /**
+   * Rerank a deeper candidate set before returning `top_k` results.
+   * Defaults to on for search. Ignored in `keyword` mode, where lexical
+   * ranking is already exact and no embedding call is made.
+   */
+  rerank?: boolean;
 }
 
 export interface SearchResult {
@@ -49,4 +55,11 @@ export interface SearchResponse {
   mode: SearchMode;
   results: SearchResult[];
   total_results: number;
+  /**
+   * True only when a reranker actually reordered these results. False when
+   * reranking was off, skipped, or fell back to the retrieval order —
+   * there is deliberately no rerank score, because a generative ranking
+   * is ordinal and cannot be reported as a comparable number.
+   */
+  reranked: boolean;
 }

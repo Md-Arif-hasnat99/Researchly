@@ -52,6 +52,7 @@ function makeResult(overrides: Partial<SearchResponse> = {}): SearchResponse {
         fusion_score: 0.016,
       },
     ],
+    reranked: true,
     ...overrides,
   };
 }
@@ -202,7 +203,7 @@ describe('Search page', () => {
   });
 
   it('explains an empty result set', async () => {
-    mockSearch.mockResolvedValue({ query: 'nothing', mode: 'hybrid', results: [], total_results: 0 });
+    mockSearch.mockResolvedValue({ query: 'nothing', mode: 'hybrid', results: [], total_results: 0, reranked: false });
     renderPage();
     await submitQuery('nothing');
 
@@ -216,5 +217,59 @@ describe('Search page', () => {
     await submitQuery('ImageNet');
 
     await waitFor(() => expect(screen.getByText('Search failed. Please try again.')).toBeTruthy());
+  });
+
+  it('asks the server to rerank by default', async () => {
+    renderPage();
+    await submitQuery('ImageNet');
+
+    await waitFor(() => expect(mockSearch).toHaveBeenCalled());
+    expect(mockSearch.mock.calls[0][0]).toMatchObject({ rerank: true });
+  });
+
+  it('sends the rerank choice when the toggle is switched off', async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('rerank-toggle'));
+    await submitQuery('ImageNet');
+
+    await waitFor(() => expect(mockSearch).toHaveBeenCalled());
+    expect(mockSearch.mock.calls[0][0]).toMatchObject({ rerank: false });
+  });
+
+  it('does not request a rerank in keyword mode, where it cannot apply', async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('search-mode-keyword'));
+    await submitQuery('ImageNet');
+
+    await waitFor(() => expect(mockSearch).toHaveBeenCalled());
+    // Literal matching is exact and makes no AI call, so asking for a
+    // rerank would only add latency.
+    expect(mockSearch.mock.calls[0][0]).toMatchObject({ mode: 'keyword', rerank: false });
+  });
+
+  it('disables the rerank toggle in keyword mode and says why', () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('search-mode-keyword'));
+
+    expect((screen.getByTestId('rerank-toggle') as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByTestId('rerank-hint').textContent).toMatch(/not available in keyword mode/i);
+  });
+
+  it('reports a rerank that was actually applied', async () => {
+    renderPage();
+    await submitQuery('ImageNet');
+
+    await waitFor(() => expect(screen.getByTestId('rerank-applied')).toBeTruthy());
+  });
+
+  it('shows no rerank claim when the server did not rerank', async () => {
+    // Reranking is best-effort: it is skipped without an API key and falls
+    // back to the retrieval order if the model call fails.
+    mockSearch.mockResolvedValue(makeResult({ reranked: false }));
+    renderPage();
+    await submitQuery('ImageNet');
+
+    await waitFor(() => expect(screen.getByText('2 results')).toBeTruthy());
+    expect(screen.queryByTestId('rerank-applied')).toBeNull();
   });
 });
