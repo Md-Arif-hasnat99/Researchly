@@ -22,8 +22,37 @@ class TestSettings:
         assert len(settings.CORS_ORIGINS) > 0
 
     def test_embedding_model_configured(self):
+        """Assert the model's *shape*, not a literal name.
+
+        This test used to assert the exact string
+        "models/text-embedding-004". That model has since been retired by
+        Google, and the assertion kept passing while every embedding call
+        404'd — a green test guarding a broken deployment. The name is
+        configurable and changes over time; what must not change is that
+        it is a well-formed model reference and not a known-dead one.
+        """
         settings = get_settings()
-        assert settings.GEMINI_EMBEDDING_MODEL == "models/text-embedding-004"
+        model = settings.GEMINI_EMBEDDING_MODEL
+        assert model.startswith("models/") and len(model) > len("models/")
+        # Retired upstream: the API answers 404 NOT_FOUND for these.
+        assert "text-embedding-004" not in model
+
+    def test_generation_model_configured(self):
+        """Same reasoning as the embedding model above.
+
+        The default was "models/gemini-1.5-pro", which is retired, so
+        every chat / compare / review / gaps request failed at the last
+        step with a 404 from the API. Availability is per-project, so
+        this also rejects the families this key is refused.
+        """
+        settings = get_settings()
+        model = settings.GEMINI_GENERATION_MODEL
+        assert model.startswith("models/") and len(model) > len("models/")
+        for retired in ("gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"):
+            assert retired not in model, (
+                f"{model} is not available to this project; the API answers "
+                "404 for it, so every generation request would fail"
+            )
 
 
 class TestPaperSchemas:

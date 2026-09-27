@@ -68,6 +68,19 @@ def _stub_ownership(mock_db, rows: list[dict]) -> None:
     query.execute.return_value = MagicMock(data=rows)
 
 
+
+
+@pytest.fixture(autouse=True)
+def _stub_query_embedding():
+    """Stub the single retrieval-query embedding the route now does itself.
+
+    These tests mock ``similarity_search``, which is where the query used
+    to be embedded. The route now embeds once up front and passes the
+    vector down, so without this the real (unkeyed) Gemini call would run.
+    """
+    with patch("app.api.research.embed_query", return_value=[0.0] * 768):
+        yield
+
 # ---------------------------------------------------------------------------
 # POST /api/research/compare — happy path
 # ---------------------------------------------------------------------------

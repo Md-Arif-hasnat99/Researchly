@@ -25,6 +25,20 @@ logger = logging.getLogger("researchly")
 
 
 @dataclass
+class RetrievedContext:
+    """The chunk set assembled for generation, before any answer exists."""
+
+    chunks: list[SearchResultChunk] = field(default_factory=list)
+    """Chunks to send to Gemini, already reranked and truncated."""
+
+    retrieved_count: int = 0
+    """Total chunks returned by retrieval before reranking and truncation."""
+
+    reranked: bool = False
+    """True only when a reranker actually reordered the context sent to Gemini."""
+
+
+@dataclass
 class RAGResult:
     """Complete result from one RAG pipeline invocation."""
 
@@ -41,15 +55,20 @@ class RAGResult:
     """True only when a reranker actually reordered the context sent to Gemini."""
 
 
-def run_rag(
+def retrieve_context(
     query: str,
     user_id: str,
     top_k: int = 8,
     similarity_threshold: float = 0.65,
     paper_ids: list[UUID] | None = None,
     rerank: bool | None = None,
-) -> RAGResult:
-    """Run the full RAG pipeline for a single user question.
+) -> RetrievedContext:
+    """Retrieve and (optionally) rerank the context for one question.
+
+    Split out from :func:`run_rag` so the streaming endpoint can share the
+    exact same retrieval and reranking behaviour instead of reimplementing
+    it. Nothing here generates text, so a caller can send the sources to
+    the client before the first token exists.
 
     Args:
         query:                The user's question string.
@@ -57,13 +76,13 @@ def run_rag(
         top_k:                Maximum chunks to pass to Gemini.
         similarity_threshold: Minimum cosine similarity for retrieval.
         paper_ids:            Optional list of paper UUIDs to scope retrieval.
-        rerank:               Rerank the candidate set before generation
-                              (FR-15). ``None`` uses the server default,
-                              which is off for chat: it would add a full
-                              LLM round-trip to every turn.
+        rerank:               Rerank the candidate set (FR-15). ``None``
+                              uses the server default, which is off for
+                              chat: it would add a full LLM round-trip to
+                              every turn.
 
     Returns:
-        :class:`RAGResult` with answer text and cited chunks.
+        :class:`RetrievedContext` with the chunks to generate from.
 
     Raises:
         RuntimeError: If Gemini API key is not configured.
@@ -73,7 +92,7 @@ def run_rag(
     rerank_enabled = settings.RERANK_CHAT_DEFAULT if rerank is None else rerank
 
     logger.info(
-        "RAG pipeline start | user=%s query=%r top_k=%d paper_ids=%s rerank=%s",
+        "RAG retrieval start | user=%s query=%r top_k=%d paper_ids=%s rerank=%s",
         user_id,
         query[:80],
         top_k,
@@ -108,14 +127,56 @@ def run_rag(
         "Context for generation: %d chunk(s) (reranked=%s)", len(chunks), reranked
     )
 
+    return RetrievedContext(
+        chunks=chunks, retrieved_count=retrieved_count, reranked=reranked
+    )
+
+
+def run_rag(
+    query: str,
+    user_id: str,
+    top_k: int = 8,
+    similarity_threshold: float = 0.65,
+    paper_ids: list[UUID] | None = None,
+    rerank: bool | None = None,
+) -> RAGResult:
+    """Run the full RAG pipeline for a single user question.
+
+    Args:
+        query:                The user's question string.
+        user_id:              UUID of the authenticated user.
+        top_k:                Maximum chunks to pass to Gemini.
+        similarity_threshold: Minimum cosine similarity for retrieval.
+        paper_ids:            Optional list of paper UUIDs to scope retrieval.
+        rerank:               Rerank the candidate set before generation
+                              (FR-15). ``None`` uses the server default,
+                              which is off for chat: it would add a full
+                              LLM round-trip to every turn.
+
+    Returns:
+        :class:`RAGResult` with answer text and cited chunks.
+
+    Raises:
+        RuntimeError: If Gemini API key is not configured.
+        Exception:    Propagated from Gemini SDK or Supabase on failure.
+    """
+    context = retrieve_context(
+        query=query,
+        user_id=user_id,
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+        paper_ids=paper_ids,
+        rerank=rerank,
+    )
+
     # Step 3: Generate grounded answer
-    generated: GeneratedAnswer = generate_answer(query=query, chunks=chunks)
+    generated: GeneratedAnswer = generate_answer(query=query, chunks=context.chunks)
 
     logger.info("RAG pipeline complete — answer length=%d", len(generated.answer))
 
     return RAGResult(
         answer=generated.answer,
         cited_chunks=generated.cited_chunks,
-        retrieved_count=retrieved_count,
-        reranked=reranked,
+        retrieved_count=context.retrieved_count,
+        reranked=context.reranked,
     )

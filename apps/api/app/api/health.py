@@ -74,13 +74,33 @@ async def check_supabase() -> str:
 
 
 async def check_gemini() -> str:
+    """Probe Gemini for the models this process will actually call.
+
+    Listing ``/models`` is not enough: that endpoint answers 200 as long
+    as the *key* works, so it stayed green while every generation and
+    embedding call 404'd on a model Google had retired — the deployment
+    looked healthy and every request failed. This asks for the configured
+    models by name, which is the thing that has to exist.
+    """
     settings = get_settings()
     if not settings.GEMINI_API_KEY:
         return "unconfigured"
-    return await _probe(
-        "https://generativelanguage.googleapis.com/v1beta/models",
-        headers={"x-goog-api-key": settings.GEMINI_API_KEY},
-    )
+
+    headers = {"x-goog-api-key": settings.GEMINI_API_KEY}
+    for model in (
+        settings.GEMINI_GENERATION_MODEL,
+        settings.GEMINI_EMBEDDING_MODEL,
+    ):
+        # The API expects the bare "models/<id>" path segment.
+        name = model.split("/")[-1]
+        state = await _probe(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{name}",
+            headers=headers,
+        )
+        if state != "reachable":
+            return f"{state} ({name})"
+
+    return "reachable"
 
 
 @router.get("/ready", response_model=HealthResponse)

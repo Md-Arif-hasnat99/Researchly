@@ -201,8 +201,14 @@ def _ingest_paper(paper_id: str, file_path: str) -> None:
 
 
 @router.get("", response_model=PaperListResponse)
-async def list_papers(current_user: CurrentUser) -> PaperListResponse:
-    """Return all papers belonging to the authenticated user."""
+def list_papers(current_user: CurrentUser) -> PaperListResponse:
+    """Return all papers belonging to the authenticated user.
+
+    Sync ``def`` on purpose (as with the other read routes): the
+    Supabase call is blocking, and an ``async def`` handler would run
+    it on the event loop and stall every concurrent request. FastAPI
+    threadpools sync handlers.
+    """
     client = get_supabase_client()
     result = (
         client.table("papers")
@@ -221,7 +227,7 @@ async def list_papers(current_user: CurrentUser) -> PaperListResponse:
 
 
 @router.get("/{paper_id}", response_model=PaperResponse)
-async def get_paper(paper_id: str, current_user: CurrentUser) -> PaperResponse:
+def get_paper(paper_id: str, current_user: CurrentUser) -> PaperResponse:
     """Return a single paper by ID (ownership enforced)."""
     client = get_supabase_client()
     try:
@@ -248,7 +254,7 @@ async def get_paper(paper_id: str, current_user: CurrentUser) -> PaperResponse:
 
 
 @router.delete("/{paper_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_paper(paper_id: str, current_user: CurrentUser) -> None:
+def delete_paper(paper_id: str, current_user: CurrentUser) -> None:
     """Delete a paper and its storage object (ownership enforced)."""
     client = get_supabase_client()
 
@@ -285,7 +291,7 @@ async def delete_paper(paper_id: str, current_user: CurrentUser) -> None:
 
 
 @router.get("/{paper_id}/chunks", response_model=ChunkListResponse)
-async def list_chunks(paper_id: str, current_user: CurrentUser) -> ChunkListResponse:
+def list_chunks(paper_id: str, current_user: CurrentUser) -> ChunkListResponse:
     """Return all text chunks for a paper (ownership enforced)."""
     client = get_supabase_client()
 
@@ -322,7 +328,7 @@ async def list_chunks(paper_id: str, current_user: CurrentUser) -> ChunkListResp
 
 
 @router.post("/{paper_id}/ingest", response_model=IngestionStatusResponse)
-async def trigger_ingestion(
+def trigger_ingestion(
     paper_id: str,
     current_user: CurrentUser,
     background_tasks: BackgroundTasks,

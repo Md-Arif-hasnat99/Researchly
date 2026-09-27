@@ -4,14 +4,16 @@ Generates 768-dimensional text embeddings using Google's
 ``text-embedding-004`` model via the ``google-genai`` SDK.
 
 Features:
-- Batch processing (respects Gemini API batch limits)
+- Batched embedding (respects Gemini API batch limits)
+- Batches embedded concurrently, results returned in input order
 - Exponential-backoff retry on transient failures
-- Dimension validation (guards against API changes)
+- Dimension and cardinality validation (guards against API changes)
 - Zero external state — pure functions, safe to call from threads
 """
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import google.genai as genai
 import google.genai.types as genai_types
@@ -26,6 +28,12 @@ EMBEDDING_DIM = 768
 
 # Gemini API batch limit for embedContent (content items per request)
 _BATCH_SIZE = 100
+
+# How many batches may be in flight at once. The requests are independent,
+# so throughput scales with this, but each one holds a connection to Gemini
+# and contributes to the per-project rate limit, so it stays modest rather
+# than unbounded.
+_MAX_CONCURRENT_BATCHES = 4
 
 # Retry configuration (see app.core.retry for what counts as transient)
 _MAX_RETRIES = 3
@@ -68,14 +76,25 @@ def _validate_vector(vector: list[float]) -> list[float]:
 def embed_texts(texts: list[str]) -> list[list[float]]:
     """Generate embeddings for a list of text strings.
 
+    Batches are embedded **concurrently** (bounded by
+    ``_MAX_CONCURRENT_BATCHES``) rather than one after another. A paper
+    of 500 chunks is 5 requests to Gemini, and the requests are
+    independent, so serialising them multiplied ingestion time by the
+    batch count for no benefit. Results are reassembled in the caller's
+    original order.
+
     Args:
         texts: Non-empty list of strings to embed.
 
     Returns:
-        List of 768-dimensional float vectors, in the same order as *texts*.
+        List of 768-dimensional float vectors, in the same order and
+        with the same length as *texts*.
 
     Raises:
-        ValueError:   If a returned vector has the wrong dimension.
+        ValueError:   If a returned vector has the wrong dimension, or
+                      the API returns a different number of vectors than
+                      inputs (which would otherwise misalign every
+                      downstream chunk-to-vector pairing).
         RuntimeError: If the Gemini API key is not configured.
         Exception:    Propagated from the Gemini SDK after all retries fail.
     """
@@ -91,34 +110,51 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
     client = _get_client()
     model = settings.GEMINI_EMBEDDING_MODEL
-    all_vectors: list[list[float]] = []
+    batches = [texts[i : i + _BATCH_SIZE] for i in range(0, len(texts), _BATCH_SIZE)]
 
-    for batch_start in range(0, len(texts), _BATCH_SIZE):
-        batch = texts[batch_start : batch_start + _BATCH_SIZE]
-
-        def _embed_batch(b: list[str] = batch) -> list[list[float]]:
+    def _embed_batch(batch: list[str]) -> list[list[float]]:
+        def _call() -> list[list[float]]:
             response = client.models.embed_content(
                 model=model,
-                contents=b,
+                contents=batch,
                 config=genai_types.EmbedContentConfig(
                     task_type="RETRIEVAL_DOCUMENT",
+                    # Pinned rather than assumed: the model supports
+                    # several output widths, and paper_chunks.embedding
+                    # is a vector(768) column. Asking for 768 explicitly
+                    # means a model default change surfaces as a
+                    # dimension error we can report, instead of a
+                    # Postgres insert failure at the end of ingestion.
+                    output_dimensionality=EMBEDDING_DIM,
                 ),
             )
             return [list(emb.values) for emb in response.embeddings]
 
-        vectors: list[list[float]] = _with_retry(_embed_batch)
+        vectors = _with_retry(_call)
 
-        for vec, text in zip(vectors, batch):
-            all_vectors.append(_validate_vector(vec))
+        # A short response means the vectors no longer line up with the
+        # inputs. Callers zip them positionally, so this must fail loudly
+        # rather than silently associate a chunk with another chunk's
+        # vector — or, worse, truncate the paper's chunks in silence.
+        if len(vectors) != len(batch):
+            raise ValueError(
+                f"Gemini returned {len(vectors)} embeddings for "
+                f"{len(batch)} inputs; refusing to misalign them."
+            )
+        return [_validate_vector(vec) for vec in vectors]
 
-        logger.debug(
-            "Embedded batch %d–%d (%d vectors)",
-            batch_start,
-            batch_start + len(batch) - 1,
-            len(batch),
-        )
+    with ThreadPoolExecutor(max_workers=min(_MAX_CONCURRENT_BATCHES, len(batches))) as pool:
+        # map preserves order, so the result is independent of the order
+        # in which the batches actually complete.
+        per_batch = list(pool.map(_embed_batch, batches))
 
-    logger.info("Generated %d embeddings via %s", len(all_vectors), model)
+    all_vectors: list[list[float]] = [vec for batch_vectors in per_batch for vec in batch_vectors]
+    logger.info(
+        "Generated %d embeddings in %d batch(es) via %s",
+        len(all_vectors),
+        len(batches),
+        model,
+    )
     return all_vectors
 
 
@@ -147,6 +183,9 @@ def embed_query(text: str) -> list[float]:
             contents=[text],
             config=genai_types.EmbedContentConfig(
                 task_type="RETRIEVAL_QUERY",
+                # Must match the document side exactly, or a query vector
+                # and the stored chunk vectors are not comparable.
+                output_dimensionality=EMBEDDING_DIM,
             ),
         )
         return list(response.embeddings[0].values)

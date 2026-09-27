@@ -130,6 +130,7 @@ def similarity_search(
     top_k: int = 8,
     similarity_threshold: float = 0.65,
     paper_ids: list[UUID] | None = None,
+    query_vector: list[float] | None = None,
 ) -> list[SearchResultChunk]:
     """Search paper_chunks for chunks semantically similar to *query*.
 
@@ -143,19 +144,29 @@ def similarity_search(
                               below this value are discarded.
         paper_ids:            Optional list of paper UUIDs to restrict the
                               search to.  ``None`` searches all user papers.
+        query_vector:         Optional precomputed ``RETRIEVAL_QUERY``
+                              embedding of *query*.  Pass this when the same
+                              query is searched more than once (e.g. once
+                              per paper in cross-paper synthesis): the query
+                              text is identical each time, so embedding it
+                              repeatedly is a paid round-trip that returns
+                              a bit-identical vector.
 
     Returns:
         List of :class:`SearchResultChunk` ordered by similarity score
         descending.  Each result is tagged ``matched_by=['vector']``.
 
     Raises:
-        RuntimeError: If the Gemini API key is not configured.
+        RuntimeError: If the Gemini API key is not configured and no
+            *query_vector* was supplied.
         Exception:    Propagated from the Gemini SDK or Supabase client.
     """
     _log_query(query, user_id, top_k, "vector", paper_ids)
 
-    # 1. Embed the query with RETRIEVAL_QUERY task type
-    query_vector: list[float] = embed_query(query)
+    # 1. Embed the query with RETRIEVAL_QUERY task type, unless the
+    #    caller already did it.
+    if query_vector is None:
+        query_vector = embed_query(query)
 
     # 2. Call the Postgres RPC function
     client = get_supabase_client()

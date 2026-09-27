@@ -24,11 +24,17 @@ router = APIRouter(prefix="/search", tags=["Search"])
 
 
 @router.post("", response_model=SearchResponse)
-async def search_papers(
+def search_papers(
     request: SearchRequest,
     current_user: CurrentUser,
 ) -> SearchResponse:
     """Search the user's paper library.
+
+    Deliberately ``def``, not ``async def``: everything below is
+    blocking I/O (a Gemini embedding call, a Supabase RPC), and an
+    ``async def`` handler would run it on the event loop, so the whole
+    API stalls while one search is in flight. FastAPI runs sync
+    handlers in a threadpool, which keeps the loop free.
 
     Dispatches to the retriever named by ``mode``:
 

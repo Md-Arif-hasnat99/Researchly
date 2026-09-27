@@ -43,9 +43,32 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
 
-    # Embedding and generation defaults
-    GEMINI_EMBEDDING_MODEL: str = "models/text-embedding-004"
-    GEMINI_GENERATION_MODEL: str = "models/gemini-1.5-pro"
+    # Embedding and generation defaults.
+    #
+    # Both defaults were previously `text-embedding-004` and
+    # `gemini-1.5-pro`, which Google has since retired: the API answers
+    # 404 NOT_FOUND for them, so every generation *and* every ingestion
+    # failed at the last step. Verified against the live API with the
+    # project's own key, which is what settled the values below.
+    #
+    # Note that availability is per-project, not global: this key is also
+    # refused the 2.5 and 2.0 families ("no longer available to new
+    # users"), so a model that works elsewhere may not work here. The
+    # readiness probe checks both configured models by name for exactly
+    # this reason — a retired or unavailable model now fails /api/health
+    # /ready instead of surfacing as a 404 on the first user request.
+    #
+    # The embedding model is pinned to 768 dimensions by an explicit
+    # output_dimensionality, not by luck: the paper_chunks.embedding
+    # column is vector(768), and a model that silently returned a
+    # different width would fail at insert instead of at startup.
+    #
+    # Both are overridable per environment. No pro-tier generation model
+    # is currently available to this project; if access is granted,
+    # setting GEMINI_GENERATION_MODEL to a pro variant is a one-line
+    # change with no code edit.
+    GEMINI_EMBEDDING_MODEL: str = "models/gemini-embedding-001"
+    GEMINI_GENERATION_MODEL: str = "models/gemini-3.8-flash"
     DEFAULT_TOP_K: int = 8
     DEFAULT_SIMILARITY_THRESHOLD: float = 0.65
 
