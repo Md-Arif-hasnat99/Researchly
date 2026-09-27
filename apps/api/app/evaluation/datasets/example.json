@@ -1,0 +1,113 @@
+{
+  "version": "example-1",
+  "description": "Example FR-16 evaluation set over six well-known ML papers. Page numbers refer to the published PDFs and MUST be verified against your own copies before trusting a score: an off-by-one page label turns a correct retrieval into a counted miss. Replace this file with questions and labels from your own library for a result that means anything to you. Tags exist so a report can be sliced by question type — 'exact-term' (model, dataset and author names) is where reranking and keyword search are easiest to regress.",
+  "cases": [
+    {
+      "id": "attention-multihead",
+      "question": "In the Transformer, how is multi-head attention computed and why is it used instead of a single attention head?",
+      "expected_pages": [
+        {
+          "paper_title": "Attention Is All You Need",
+          "page_number": 3,
+          "note": "Section 3.2.1 Scaled Dot-Product Attention / 3.2.2 Multi-Head Attention"
+        },
+        {
+          "paper_title": "Attention Is All You Need",
+          "page_number": 4,
+          "note": "MultiHead formula and the 'different positions' argument"
+        }
+      ],
+      "expected_answer_characteristics": [
+        "states that each head is a separate projection followed by a concatenation and linear layer",
+        "gives the multi-head formula or describes concatenating h parallel attention heads",
+        "explains that different heads can attend to different positions or subspaces"
+      ],
+      "tags": ["method", "why"]
+    },
+    {
+      "id": "attention-bleu",
+      "question": "What BLEU scores does the paper report for its base and big Transformer models on WMT 2014 English-to-German?",
+      "expected_pages": [
+        {
+          "paper_title": "Attention Is All You Need",
+          "page_number": 8,
+          "note": "Table 2, WMT 2014 translation results"
+        }
+      ],
+      "expected_answer_characteristics": [
+        "reports a number together with its unit or benchmark name",
+        "distinguishes the base model from the big model",
+        "does not invent a score for a split that is not in the table"
+      ],
+      "tags": ["numeric", "exact-term"]
+    },
+    {
+      "id": "rag-architecture",
+      "question": "In RAG, how does the retrieved document enter the generation step?",
+      "expected_pages": [
+        {
+          "paper_title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+          "page_number": 3,
+          "note": "Section 2 model statement / RAG-Sequence definition"
+        }
+      ],
+      "expected_answer_characteristics": [
+        "describes concatenating or marginalising a latent document representation with the query representation",
+        "mentions marginalising over the retrieved documents rather than conditioning on one",
+        "distinguishes the generator from the retriever"
+      ],
+      "tags": ["method"]
+    },
+    {
+      "id": "bert-masking",
+      "question": "How does BERT choose its masked language modelling tokens, and what percentage does it mask?",
+      "expected_pages": [
+        {
+          "paper_title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+          "page_number": 4,
+          "note": "Section 3.1.1 Masked LM, including the 15% figure"
+        }
+      ],
+      "expected_answer_characteristics": [
+        "states the masking rate as 15% of tokens",
+        "explains that of the masked tokens 80% are replaced with [MASK], 10% with a random token, and 10% are left unchanged",
+        "does not confuse the rate of selection with the rate of replacement"
+      ],
+      "tags": ["numeric", "method"]
+    },
+    {
+      "id": "densenet-compression",
+      "question": "What problem does the DenseNet layer design solve, and what is the compression factor?",
+      "expected_pages": [
+        {
+          "paper_title": "Densely Connected Convolutional Networks",
+          "page_number": 5,
+          "note": "Section 3.1 DenseNet layer / 3.2 compression, and Table 1 for the compression factor"
+        }
+      ],
+      "expected_answer_characteristics": [
+        "identifies the alleviation of vanishing gradients or optimisation difficulty from shorter connections",
+        "states the compression factor as 0.5 (theta = 0.5)",
+        "describes transition layers as reducing the number of feature maps"
+      ],
+      "tags": ["method", "numeric"]
+    },
+    {
+      "id": "adam-dropout-paper",
+      "question": "In the Adam optimizer paper, how are the running averages of the gradients decayed, and what are the default beta values?",
+      "expected_pages": [
+        {
+          "paper_title": "Adam: A Method for Stochastic Optimization",
+          "page_number": 3,
+          "note": "Section 2.1 Algorithm, equations for m and v with beta1 and beta2"
+        }
+      ],
+      "expected_answer_characteristics": [
+        "gives the bias-corrected exponential moving averages for the first and second moments",
+        "states the default beta1 = 0.9 and beta2 = 0.999",
+        "notes that alpha corrects the bias from the zero initialisation, not that it is a learning rate decay"
+      ],
+      "tags": ["numeric", "exact-term"]
+    }
+  ]
+}
