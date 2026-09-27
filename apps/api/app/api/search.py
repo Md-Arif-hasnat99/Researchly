@@ -1,11 +1,14 @@
-"""Search API router — POST /api/search (Part 14: hybrid retrieval)."""
+"""Search API router — POST /api/search (Part 14 hybrid, Part 15 rerank)."""
 
 from fastapi import APIRouter, HTTPException, status
 
+from app.core.config import get_settings
 from app.core.logging import logger
 from app.core.security import CurrentUser
+from app.rag.retrieval.rerank import rerank_chunks
 from app.rag.retrieval.search import (
     SearchOutcome,
+    candidate_depth,
     hybrid_search,
     keyword_search,
     similarity_search,
@@ -36,12 +39,30 @@ async def search_papers(
     * ``keyword`` — full-text only; requires no embedding call, so it
       still works with no Gemini API key configured.
 
+    When reranking is enabled (FR-15) the full candidate set is re-scored
+    for genuine relevance before the list is cut down to ``top_k``,
+    instead of simply keeping the retrievers' first ``top_k``.
+
     The response reports the mode that actually ran, so a hybrid search
-    that had to fall back to vector-only is visible to the caller.
+    that had to fall back to vector-only is visible to the caller, and
+    ``reranked`` is only true when a reranker really did the ordering.
     """
     user_id = str(current_user.id)
+    settings = get_settings()
     outcome: SearchOutcome
     results: list[SearchResultChunk]
+
+    # Reranking is skipped in keyword mode: lexical ranking is already
+    # exact, so there is little for a relevance model to add and it would
+    # only add latency and a dependency on the Gemini key.
+    rerank_requested = (
+        request.rerank
+        if request.rerank is not None
+        else settings.RERANK_SEARCH_DEFAULT
+    )
+    if rerank_requested and request.mode is SearchMode.keyword:
+        logger.info("Rerank ignored: keyword mode ranks lexically already.")
+        rerank_requested = False
 
     try:
         if request.mode is SearchMode.keyword:
@@ -54,30 +75,50 @@ async def search_papers(
                 paper_ids=request.paper_ids,
             )
             outcome = SearchOutcome(results=results, mode=SearchMode.keyword)
-        elif request.mode is SearchMode.vector:
-            results = similarity_search(
-                query=request.query,
-                user_id=user_id,
-                top_k=request.top_k,
-                similarity_threshold=request.similarity_threshold,
-                paper_ids=request.paper_ids,
-            )
-            outcome = SearchOutcome(results=results, mode=SearchMode.vector)
         else:
-            outcome = hybrid_search(
-                query=request.query,
-                user_id=user_id,
-                top_k=request.top_k,
-                similarity_threshold=request.similarity_threshold,
-                paper_ids=request.paper_ids,
+            # With reranking on, retrieve deeper than the caller asked for
+            # so the reranker has a real choice; without it, the
+            # retrievers' own top_k is the answer. Fetching top_k first
+            # and reranking afterwards would leave the reranker nothing to
+            # choose between.
+            fetch_depth = (
+                candidate_depth(request.top_k) if rerank_requested else request.top_k
             )
-            if outcome.keyword_degraded:
-                logger.warning(
-                    "Hybrid search degraded to vector-only | user=%s query=%r",
-                    user_id,
-                    request.query[:80],
+            if request.mode is SearchMode.vector:
+                results = similarity_search(
+                    query=request.query,
+                    user_id=user_id,
+                    top_k=fetch_depth,
+                    similarity_threshold=request.similarity_threshold,
+                    paper_ids=request.paper_ids,
                 )
-            results = outcome.results
+                outcome = SearchOutcome(results=results, mode=SearchMode.vector)
+            else:
+                outcome = hybrid_search(
+                    query=request.query,
+                    user_id=user_id,
+                    top_k=fetch_depth,
+                    similarity_threshold=request.similarity_threshold,
+                    paper_ids=request.paper_ids,
+                )
+                if outcome.keyword_degraded:
+                    logger.warning(
+                        "Hybrid search degraded to vector-only | user=%s query=%r",
+                        user_id,
+                        request.query[:80],
+                    )
+                results = outcome.results
+
+        # FR-15: rerank the full candidate set, then truncate to top_k.
+        reranked = False
+        if rerank_requested:
+            rerank_result = rerank_chunks(
+                query=request.query,
+                candidates=results,
+                top_k=request.top_k,
+            )
+            results = rerank_result.chunks
+            reranked = rerank_result.reranked
     except RuntimeError as exc:
         # Gemini API key not configured
         logger.error("Search failed — configuration error: %s", exc)
@@ -93,10 +134,11 @@ async def search_papers(
         ) from exc
 
     logger.info(
-        "Search complete | user=%s mode=%s results=%d",
+        "Search complete | user=%s mode=%s results=%d reranked=%s",
         user_id,
         outcome.mode.value,
         len(results),
+        reranked,
     )
 
     return SearchResponse(
@@ -104,4 +146,5 @@ async def search_papers(
         mode=outcome.mode,
         results=results,
         total_results=len(results),
+        reranked=reranked,
     )

@@ -41,6 +41,13 @@ class SearchRequest(BaseModel):
         default=SearchMode.hybrid,
         description="Retrieval strategy. hybrid = vector + keyword fused by rank.",
     )
+    rerank: bool | None = Field(
+        default=None,
+        description=(
+            "Rerank the candidate set with a relevance model before "
+            "truncating (FR-15). None = server default."
+        ),
+    )
 
     @field_validator("query")
     @classmethod
@@ -96,3 +103,12 @@ class SearchResponse(BaseModel):
     )
     results: list[SearchResultChunk]
     total_results: int
+    reranked: bool = Field(
+        default=False,
+        description=(
+            "True only when a reranker actually reordered the results. "
+            "False covers both 'not requested' and 'requested but did not "
+            "apply', so a caller never implies model involvement that did "
+            "not happen."
+        ),
+    )

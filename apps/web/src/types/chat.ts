@@ -14,6 +14,12 @@ export interface ChatResponse {
   message_id: string;
   answer: string;
   citations: ChatCitation[];
+  /**
+   * True only when a reranker reordered the context sent to the model
+   * (FR-15). Off by default for chat: it costs an extra model round-trip
+   * on every turn.
+   */
+  reranked: boolean;
 }
 
 export type MessageRole = 'user' | 'assistant';

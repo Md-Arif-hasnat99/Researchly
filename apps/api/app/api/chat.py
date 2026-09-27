@@ -50,6 +50,13 @@ class ChatRequest(BaseModel):
     )
     top_k: int = Field(default=8, ge=1, le=20)
     similarity_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    rerank: bool | None = Field(
+        default=None,
+        description=(
+            "Rerank retrieved chunks before generation (FR-15). None = "
+            "server default, which is off for chat."
+        ),
+    )
 
 
 class ChatCitation(BaseModel):
@@ -70,6 +77,8 @@ class ChatResponse(BaseModel):
     message_id: uuid.UUID
     answer: str
     citations: list[ChatCitation]
+    reranked: bool = False
+    """True only when a reranker reordered the context sent to Gemini (FR-15)."""
 
 
 class ConversationListResponse(BaseModel):
@@ -208,6 +217,7 @@ async def chat(
             top_k=request.top_k,
             similarity_threshold=request.similarity_threshold,
             paper_ids=request.paper_ids,
+            rerank=request.rerank,
         )
     except RuntimeError as exc:
         logger.error("RAG pipeline config error: %s", exc)
@@ -247,6 +257,7 @@ async def chat(
         message_id=uuid.UUID(assistant_msg_id),
         answer=rag_result.answer,
         citations=citations,
+        reranked=rag_result.reranked,
     )
 
 

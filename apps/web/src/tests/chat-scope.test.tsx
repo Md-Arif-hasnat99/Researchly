@@ -23,7 +23,8 @@ vi.mock('../lib/api', () => ({
   listConversations: () => mockListConversations(),
   getConversation: vi.fn(),
   deleteConversation: vi.fn(),
-  askQuestion: (q: string, c?: string, p?: string[]) => mockAskQuestion(q, c, p),
+  askQuestion: (q: string, c?: string, p?: string[], r?: boolean) =>
+    mockAskQuestion(q, c, p, r),
   listPapers: () => mockListPapers(),
 }));
 
@@ -65,6 +66,7 @@ const ANSWER = {
   conversation_id: 'c1',
   answer: 'Because one uses retrieval.',
   citations: [],
+  reranked: false,
 };
 
 function renderChat() {
@@ -152,5 +154,48 @@ describe('Chat multi-paper scoping', () => {
 
     await waitFor(() => expect(mockAskQuestion).toHaveBeenCalled());
     expect(mockAskQuestion.mock.calls[0][2]).toEqual(['p2']);
+  });
+});
+
+describe('Chat reranking', () => {
+  it('leaves reranking off by default', async () => {
+    renderChat();
+    await waitFor(() => expect(mockListPapers).toHaveBeenCalled());
+    await send('What is attention?');
+
+    await waitFor(() => expect(mockAskQuestion).toHaveBeenCalled());
+    // A rerank costs an extra model round-trip on every turn, so it is
+    // never paid for without being asked for.
+    expect(mockAskQuestion.mock.calls[0][3]).toBe(false);
+    expect((screen.getByTestId('chat-rerank-toggle') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('sends the rerank choice once the toggle is switched on', async () => {
+    renderChat();
+    await waitFor(() => expect(mockListPapers).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId('chat-rerank-toggle'));
+    await send('What is attention?');
+
+    await waitFor(() => expect(mockAskQuestion).toHaveBeenCalled());
+    expect(mockAskQuestion.mock.calls[0][3]).toBe(true);
+  });
+
+  it('says so when the answer was built from reranked sources', async () => {
+    mockAskQuestion.mockResolvedValue({ ...ANSWER, reranked: true });
+    renderChat();
+    await waitFor(() => expect(mockListPapers).toHaveBeenCalled());
+    await send('What is attention?');
+
+    await waitFor(() => expect(screen.getByTestId('message-reranked')).toBeTruthy());
+  });
+
+  it('makes no rerank claim when the reranker fell back', async () => {
+    renderChat();
+    await waitFor(() => expect(mockListPapers).toHaveBeenCalled());
+    await send('What is attention?');
+
+    await waitFor(() => expect(screen.getByText('Because one uses retrieval.')).toBeTruthy());
+    expect(screen.queryByTestId('message-reranked')).toBeNull();
   });
 });

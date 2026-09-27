@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     DEFAULT_TOP_K: int = 8
     DEFAULT_SIMILARITY_THRESHOLD: float = 0.65
 
+    # Reranking (FR-15). Search reranks by default because the user is
+    # already waiting on the response; chat leaves it off because it would
+    # add a full LLM round-trip to every turn of a conversation. Both are
+    # overridable per request.
+    RERANK_SEARCH_DEFAULT: bool = True
+    RERANK_CHAT_DEFAULT: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
