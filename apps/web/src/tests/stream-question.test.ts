@@ -125,21 +125,49 @@ describe('streamQuestion', () => {
     expect(res.citations).toEqual(citations);
   });
 
-  it('reports an in-band error event', async () => {
+  it('rejects on an in-band error event instead of resolving empty', async () => {
     const body = frame('error', { code: 'GENERATION_FAILED', message: 'Answer generation failed. Please try again.' });
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse([body])));
 
     let caught: Error | undefined;
+    const seen: string[] = [];
     // The stream itself completes normally; the failure is in the payload.
     await streamQuestion('q', undefined, undefined, undefined, {
       onError: (e) => {
         caught = e;
+        seen.push('callback');
       },
+    }).catch((e: Error) => {
+      caught = caught ?? e;
+      seen.push('reject');
     });
 
+    // Both channels fire: the callback for observers, the rejection so a
+    // caller cannot mistake sources-with-no-answer for success.
     expect(caught).toBeInstanceOf(ApiError);
     expect(caught?.message).toContain('Answer generation failed');
+    expect(seen).toEqual(['callback', 'reject']);
+  });
+
+  it('rejects when sources arrive but the answer never does', async () => {
+    // The reported bug: citations render, the LLM answer does not, and no
+    // error is shown — because the promise resolved with an empty answer.
+    const body =
+      frame('citations', { citations: [{ chunk_id: 'c1' }] }) +
+      frame('error', { code: 'RATE_LIMITED', message: 'The AI service is at its request limit right now. Please try again in 47s.', retry_after: 47 });
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse([body])));
+
+    let caught: unknown;
+    const res = await streamQuestion('q', undefined, undefined, undefined).catch((e: unknown) => {
+      caught = e;
+      return null;
+    });
+
+    expect(res).toBeNull();
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).message).toContain('request limit');
   });
 
   it('throws an ApiError for a pre-stream failure, preserving the status', async () => {

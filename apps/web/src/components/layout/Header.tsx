@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Menu, Search, Upload, LogOut } from 'lucide-react';
+import React from 'react';
+import { Menu, Upload, LogOut } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { useAuth } from '../../context/AuthContext';
 
@@ -11,8 +10,6 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu, onOpenUploadModal }) => {
   const { user, signOut } = useAuth();
-  const navigate = useNavigate();
-  const [term, setTerm] = useState('');
 
   const initials = user?.user_metadata?.full_name
     ? user.user_metadata.full_name
@@ -22,15 +19,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu, onOpenUploadMo
         .toUpperCase()
         .slice(0, 2)
     : user?.email?.slice(0, 2).toUpperCase() ?? '??';
-
-  // Hand the query to the search page, which owns the request.
-  const runSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = term.trim();
-    if (!trimmed) return;
-    navigate(`/search?q=${encodeURIComponent(trimmed)}`);
-    setTerm('');
-  };
 
   return (
     <header className="h-16 bg-surface border-b border-border flex items-center justify-between px-4 sm:px-6 z-10 flex-shrink-0">
@@ -43,19 +31,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu, onOpenUploadMo
         >
           <Menu className="w-5 h-5" />
         </button>
-
-        {/* Global Search Bar — submits to the hybrid search page */}
-        <form onSubmit={runSearch} className="relative hidden sm:block w-72 md:w-96" role="search">
-          <Search className="w-4 h-4 text-text-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            type="search"
-            value={term}
-            onChange={(e) => setTerm(e.target.value)}
-            placeholder="Search papers, concepts, authors..."
-            aria-label="Search your paper library"
-            className="w-full bg-background border border-border rounded-lg pl-9 pr-4 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent focus:border-accent transition-colors"
-          />
-        </form>
       </div>
 
       <div className="flex items-center gap-3">

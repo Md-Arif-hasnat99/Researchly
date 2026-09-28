@@ -161,8 +161,8 @@ export const PaperDetail: React.FC = () => {
             Ask Questions About This Paper
           </Button>
         </Link>
-        <Link to="/compare" className="group">
-          <Button variant="secondary" size="md">Compare with Other Papers</Button>
+        <Link to="/papers" className="group">
+          <Button variant="secondary" size="md">Back to Library</Button>
         </Link>
       </div>
     </div>

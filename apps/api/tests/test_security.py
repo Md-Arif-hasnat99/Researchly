@@ -161,9 +161,7 @@ class TestRateLimitMiddleware:
 
     def test_expensive_endpoints_have_their_own_budget(self):
         assert "/api/chat" in EXPENSIVE_PREFIXES
-        assert "/api/research" in EXPENSIVE_PREFIXES
         assert "/api/papers" in EXPENSIVE_PREFIXES
-        assert "/api/search" in EXPENSIVE_PREFIXES
 
     def test_can_be_disabled(self, monkeypatch):
         fake = SimpleNamespace(
@@ -352,10 +350,14 @@ class TestErrorSanitization:
         )
 
     def test_upstream_config_error_is_not_shown_to_the_user(self, client):
-        with patch("app.api.search.similarity_search") as mock_search:
-            mock_search.side_effect = RuntimeError("GEMINI_API_KEY is not configured.")
+        with (
+            patch("app.api.chat._get_or_create_conversation", return_value="conv-1"),
+            patch("app.api.chat._persist_message", return_value="msg-1"),
+            patch("app.api.chat.retrieve_context") as mock_retrieve,
+        ):
+            mock_retrieve.side_effect = RuntimeError("GEMINI_API_KEY is not configured.")
             resp = client.post(
-                "/api/search", json={"query": "test"}, headers=AUTH_HEADERS
+                "/api/chat", json={"query": "test"}, headers=AUTH_HEADERS
             )
         assert resp.status_code == 503
         assert "GEMINI_API_KEY" not in resp.text

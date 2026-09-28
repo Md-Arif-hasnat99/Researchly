@@ -54,10 +54,6 @@ class TestRoutesDoNotBlockTheEventLoop:
         ("app.api.chat", "list_conversations"),
         ("app.api.chat", "get_conversation"),
         ("app.api.chat", "delete_conversation"),
-        ("app.api.search", "search_papers"),
-        ("app.api.research", "compare_papers"),
-        ("app.api.research", "generate_review"),
-        ("app.api.research", "find_gaps"),
         ("app.api.papers", "list_papers"),
         ("app.api.papers", "get_paper"),
         ("app.api.papers", "delete_paper"),
@@ -330,83 +326,6 @@ class TestReadinessChecksConfiguredModels:
 # ---------------------------------------------------------------------------
 # One query embedding per request, not per paper
 # ---------------------------------------------------------------------------
-
-
-class TestResearchEmbedsQueryOnce:
-    def test_six_papers_cost_one_embedding(self, client):
-        """The retrieval query is identical for every paper, so it is
-        embedded once and the vector reused. Previously each paper's
-        search re-embedded it: a six-paper comparison paid for six
-        identical paid Gemini round-trips.
-        """
-        from app.rag.generation.compare import ComparisonResult
-        from app.schemas.research import ComparePaperRef
-        from app.schemas.search import SearchResultChunk
-
-        paper_ids = [str(uuid4()) for _ in range(6)]
-        rows = [
-            {
-                "id": pid,
-                "user_id": USER_ID,
-                "title": f"Paper {i}",
-                "publication_year": 2020,
-                "status": "ready",
-            }
-            for i, pid in enumerate(paper_ids)
-        ]
-
-        def _chunk(paper_id, idx):
-            return SearchResultChunk(
-                chunk_id=str(uuid4()),
-                paper_id=paper_id,
-                paper_title="P",
-                page_number=idx,
-                section=None,
-                content=f"chunk {idx}",
-                similarity_score=0.5,
-                matched_by=["vector"],
-            )
-
-        db = MagicMock()
-        (
-            db.table.return_value.select.return_value.in_.return_value.eq.return_value.execute.return_value.data
-        ) = rows
-
-        with (
-            patch("app.api.research.get_supabase_client", return_value=db),
-            patch("app.api.research.embed_query", return_value=[0.0] * 768) as mock_embed,
-            patch("app.api.research.similarity_search") as mock_search,
-            patch("app.api.research.generate_comparison") as mock_gen,
-        ):
-            mock_search.side_effect = [
-                [_chunk(pid, i)] for i, pid in enumerate(paper_ids)
-            ]
-            mock_gen.return_value = ComparisonResult(
-                papers=[
-                    ComparePaperRef(
-                        paper_id=pid, paper_title=f"Paper {i}", publication_year=2020
-                    )
-                    for i, pid in enumerate(paper_ids)
-                ],
-                rows=[],
-                summary="ok",
-            )
-
-            resp = client.post(
-                "/api/research/compare",
-                json={"paper_ids": paper_ids},
-                headers=AUTH_HEADERS,
-            )
-
-        assert resp.status_code == 200, resp.text
-        assert mock_search.call_count == 6, "each paper should still be searched"
-        assert mock_embed.call_count == 1, (
-            f"query embedded {mock_embed.call_count} times for 6 papers; "
-            "it must be embedded once and reused"
-        )
-        # And the same vector must be what reached every search.
-        for call in mock_search.call_args_list:
-            assert call.kwargs["query_vector"] == [0.0] * 768
 
 
 # ---------------------------------------------------------------------------

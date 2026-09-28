@@ -49,3 +49,7 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+#issues
+issue1_body.md
+issue2_body.md

@@ -69,22 +69,14 @@ class Settings(BaseSettings):
     # change with no code edit.
     GEMINI_EMBEDDING_MODEL: str = "models/gemini-embedding-001"
     GEMINI_GENERATION_MODEL: str = "models/gemini-3.8-flash"
-
-    # Groq fallback (OpenAI-compatible API). Optional — if GROQ_API_KEY
-    # is set, the generation module will fall back to Groq when Gemini
-    # returns 429/500/503. Groq models are OpenAI-compatible; pick one
-    # that supports your desired context length.
-    GROQ_API_KEY: str = ""
-    GROQ_GENERATION_MODEL: str = "llama-3.3-70b-versatile"
-    DEFAULT_TOP_K: int = 8
+    DEFAULT_TOP_K: int = 5
     DEFAULT_SIMILARITY_THRESHOLD: float = 0.65
 
     # Reranking (FR-15). Search reranks by default because the user is
-    # already waiting on the response; chat leaves it off because it would
-    # add a full LLM round-trip to every turn of a conversation. Both are
-    # overridable per request.
+    # already waiting on the response; chat now also reranks to improve
+    # precision with the lower top_k.
     RERANK_SEARCH_DEFAULT: bool = True
-    RERANK_CHAT_DEFAULT: bool = False
+    RERANK_CHAT_DEFAULT: bool = True
 
     # ------------------------------------------------------------------
     # Security (Part 18)

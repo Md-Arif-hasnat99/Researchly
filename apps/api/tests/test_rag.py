@@ -146,7 +146,8 @@ class TestRAGPipeline:
 
         from app.rag.pipeline import run_rag
 
-        result = run_rag(query="q", user_id="user-1")
+        # Test with rerank=False to verify the basic path (no candidate over-fetching)
+        result = run_rag(query="q", user_id="user-1", rerank=False)
 
         assert result.answer == "Test answer [1]."
         assert result.retrieved_count == 1

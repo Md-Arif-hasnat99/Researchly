@@ -185,19 +185,19 @@ describe('Chat multi-paper scoping', () => {
 });
 
 describe('Chat reranking', () => {
-  it('leaves reranking off by default', async () => {
+  it('reranks by default', async () => {
     renderChat();
     await waitFor(() => expect(mockListPapers).toHaveBeenCalled());
     await send('What is attention?');
 
     await waitFor(() => expect(mockStreamQuestion).toHaveBeenCalled());
-    // A rerank costs an extra model round-trip on every turn, so it is
-    // never paid for without being asked for.
-    expect(mockStreamQuestion.mock.calls[0][3]).toBe(false);
-    expect((screen.getByTestId('chat-rerank-toggle') as HTMLInputElement).checked).toBe(false);
+    // With the smaller top_k the reranker is what keeps precision up,
+    // so it is on unless the user opts out.
+    expect(mockStreamQuestion.mock.calls[0][3]).toBe(true);
+    expect((screen.getByTestId('chat-rerank-toggle') as HTMLInputElement).checked).toBe(true);
   });
 
-  it('sends the rerank choice once the toggle is switched on', async () => {
+  it('sends the rerank choice once the toggle is switched off', async () => {
     renderChat();
     await waitFor(() => expect(mockListPapers).toHaveBeenCalled());
 
@@ -205,7 +205,7 @@ describe('Chat reranking', () => {
     await send('What is attention?');
 
     await waitFor(() => expect(mockStreamQuestion).toHaveBeenCalled());
-    expect(mockStreamQuestion.mock.calls[0][3]).toBe(true);
+    expect(mockStreamQuestion.mock.calls[0][3]).toBe(false);
   });
 
   it('says so when the answer was built from reranked sources', async () => {
@@ -224,5 +224,20 @@ describe('Chat reranking', () => {
 
     await waitFor(() => expect(screen.getByText('Because one uses retrieval.')).toBeTruthy());
     expect(screen.queryByTestId('message-reranked')).toBeNull();
+  });
+
+  it('shows the failure reason when the stream errors after sources', async () => {
+    // The reported bug: citations rendered, the LLM answer did not, and
+    // no error was shown — the bubble must carry the reason instead.
+    mockStreamQuestion.mockRejectedValueOnce(
+      new Error('The AI service is at its request limit right now. Please try again in 47s.'),
+    );
+    renderChat();
+    await waitFor(() => expect(mockListPapers).toHaveBeenCalled());
+    await send('What is attention?');
+
+    await waitFor(() =>
+      expect(screen.getByText(/at its request limit right now/i)).toBeTruthy(),
+    );
   });
 });

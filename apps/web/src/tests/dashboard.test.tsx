@@ -86,7 +86,7 @@ describe('Dashboard page', () => {
     renderDashboard();
     await waitFor(() => expect(screen.getByText('Papers Indexed')).toBeTruthy());
     expect(screen.getByText('Chat Sessions')).toBeTruthy();
-    expect(screen.getByText('Ready for Synthesis')).toBeTruthy();
+    expect(screen.getByText('Ready Papers')).toBeTruthy();
   });
 
   it('shows empty state when no papers exist', async () => {

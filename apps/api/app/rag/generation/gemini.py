@@ -1,14 +1,17 @@
-"""Grounded answer generation using Gemini with Groq fallback.
+"""Grounded answer generation using Gemini.
 
 Receives a user query and the retrieved context chunks, builds a
-grounded prompt, calls Gemini first, and falls back to Groq on
-quota/availability errors (429, 500, 503).
+grounded prompt, and calls Gemini.
 
 Grounding rules (enforced in the system prompt):
 - Use only information from the supplied context.
 - Never fabricate citations — reference only provided [N] labels.
 - If the answer is not in the context, say so explicitly.
 - Always cite sources with [N] inline references.
+- Be concise but thorough. Write in Markdown so the answer renders as
+  prose: short paragraphs, bullet or numbered lists for enumerations,
+  and **bold** for key terms or lead-ins. Do not use large headings,
+  code fences, or tables unless the question asks for them.
 
 The returned :class:`GeneratedAnswer` carries both the answer text
 and a mapping from citation index → source chunk so the caller can
@@ -19,14 +22,12 @@ import logging
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Optional
 
 import google.genai as genai
 import google.genai.types as genai_types
-from openai import OpenAI
 
 from app.core.config import get_settings
-from app.core.retry import with_retry
+from app.core.retry import is_transient, with_retry
 from app.schemas.search import SearchResultChunk
 
 logger = logging.getLogger("researchly")
@@ -36,34 +37,14 @@ logger = logging.getLogger("researchly")
 _MAX_RETRIES = 3
 _BASE_DELAY_S = 1.0
 
-# Which Google-genai exception codes should trigger a Groq fallback.
-_FALLBACK_CODES = frozenset({429, 500, 503})
+# HTTP statuses that are considered transient and worth retrying.
+_TRANSIENT_CODES = frozenset({408, 429, 500, 502, 503, 504})
 
-
-def _get_groq_client() -> Optional[OpenAI]:
-    """Return a configured OpenAI client pointed at Groq, or None if not configured."""
-    settings = get_settings()
-    if not settings.GROQ_API_KEY:
-        return None
-    return OpenAI(
-        api_key=settings.GROQ_API_KEY,
-        base_url="https://api.groq.com/openai/v1",
-    )
-
-
-def _should_fallback(exc: BaseException) -> bool:
-    """Return True if *exc* looks like a retriable provider error."""
-    # google-genai wraps errors; check .code if present
-    code = getattr(exc, "code", None)
-    if code in _FALLBACK_CODES:
-        return True
-    # Also check error message for common patterns
-    msg = str(exc).lower()
-    return any(kw in msg for kw in ("rate limit", "quota", "capacity", "unavailable", "overloaded"))
 
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
+
 
 _SYSTEM_PROMPT = """\
 You are ResearchRAG, an AI research assistant that answers questions \
@@ -147,71 +128,41 @@ def _require_api_key() -> None:
         )
 
 
-def _generate_with_groq(query: str, context_block: str, chunks: list[SearchResultChunk]) -> GeneratedAnswer:
-    """Generate answer using Groq as fallback."""
-    client = _get_groq_client()
-    if client is None:
-        raise RuntimeError("GROQ_API_KEY not configured; cannot fall back to Groq.")
-
-    settings = get_settings()
-    model = settings.GROQ_GENERATION_MODEL
-    prompt = _build_prompt(query, _build_context_block(chunks))
-
-    logger.info("Groq fallback generation | model=%s chunks=%d query=%r", model, len(chunks), query[:80])
-
-    response = client.chat.completions.create(
-        model=settings.GROQ_GENERATION_MODEL,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.2,
-        max_tokens=2048,
+def _is_transient_error(exc: BaseException) -> bool:
+    """Return True if *exc* looks like a transient provider error worth retrying."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and code in _TRANSIENT_CODES:
+        return True
+    # Also check error message for common patterns
+    msg = str(exc).lower()
+    return any(
+        kw in msg
+        for kw in ("rate limit", "quota", "capacity", "unavailable", "overloaded", "timeout")
     )
 
-    answer_text = response.choices[0].message.content or ""
-    logger.info("Groq generation complete — %d chars", len(answer_text))
-    return GeneratedAnswer(answer=answer_text, cited_chunks=chunks)
 
+def _is_quota_exceeded(exc: BaseException) -> bool:
+    """Whether *exc* is a quota/rate-limit refusal (HTTP 429).
 
-def _stream_with_groq(query: str, chunks: list[SearchResultChunk]) -> Iterator[str]:
-    """Stream answer from Groq as fallback."""
-    client = _get_groq_client()
-    if client is None:
-        raise RuntimeError("GROQ_API_KEY not configured; cannot fall back to Groq.")
-
-    settings = get_settings()
-    context_block = _build_context_block(chunks)
-    prompt = _build_prompt(query, context_block)
-
-    logger.info("Groq fallback streaming | model=%s chunks=%d query=%r",
-                settings.GROQ_GENERATION_MODEL, len(chunks), query[:80])
-
-    stream = client.chat.completions.create(
-        model=settings.GROQ_GENERATION_MODEL,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.2,
-        max_tokens=2048,
-        stream=True,
+    The provider's response carries its own backoff ("Please retry in
+    Ns"), so client-side retries cannot succeed — they only spend more
+    quota and make the user wait longer for the same refusal.
+    """
+    if getattr(exc, "code", None) == 429:
+        return True
+    msg = str(exc).lower()
+    return (
+        "rate limit" in msg or "quota" in msg or "resource_exhausted" in msg
     )
 
-    for chunk in stream:
-        delta = chunk.choices[0].delta
-        if delta.content:
-            yield delta.content
-    logger.info("Groq stream complete")
 
+def _retryable_generation_error(exc: BaseException) -> bool:
+    """Whether a failed generation call is worth one more attempt.
 
-def _require_api_key() -> None:
-    settings = get_settings()
-    if not settings.GEMINI_API_KEY:
-        raise RuntimeError(
-            "GEMINI_API_KEY is not configured. "
-            "Set it in your .env file to enable answer generation."
-        )
+    Quota errors are excluded on purpose (see :func:`_is_quota_exceeded`):
+    retrying them burns quota for an answer that cannot come back yet.
+    """
+    return is_transient(exc) and not _is_quota_exceeded(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +224,7 @@ def generate_answer(
                 ],
                 config=_generation_config(),
             ),
+            retry_on=_retryable_generation_error,
             label="answer generation",
         )
 
@@ -282,10 +234,7 @@ def generate_answer(
         return GeneratedAnswer(answer=answer_text, cited_chunks=chunks)
 
     except Exception as exc:  # noqa: BLE001
-        if _should_fallback(exc):
-            logger.warning("Gemini generation failed (%s); falling back to Groq", exc)
-            return _generate_with_groq(query, _build_context_block(chunks), chunks)
-        logger.error("Generation failed with non-fallback error: %s", exc)
+        logger.error("Generation failed: %s", exc)
         raise
 
 
@@ -361,18 +310,23 @@ def stream_answer(
             logger.info("Stream complete")
             return
         except Exception as exc:  # noqa: BLE001
-            # If we already emitted text, we can't safely switch to Groq mid-stream.
+            # If we already emitted text, we can't safely retry mid-stream.
             if emitted:
                 logger.error("Stream failed after output began: %s", exc)
                 raise
 
-            # No output yet — check if we should fall back to Groq.
-            if _should_fallback(exc):
-                logger.warning("Gemini stream failed before any output (%s); falling back to Groq stream", exc)
-                yield from _stream_with_groq(query, chunks)
-                return
+            # Quota errors carry the server's own backoff, so retrying
+            # here would only burn more quota. Fail fast instead.
+            if _is_quota_exceeded(exc):
+                logger.error("Stream failed with quota error; not retrying: %s", exc)
+                raise
 
-            # Not a fallback error — apply retry logic.
+            # No output yet and a transient error — apply retry logic.
+            if not _is_transient_error(exc):
+                logger.error("Stream failed with non-transient error: %s", exc)
+                raise
+
+            # Apply retry logic.
             if attempt >= _MAX_RETRIES:
                 logger.error("Stream failed after %d retries: %s", attempt, exc)
                 raise

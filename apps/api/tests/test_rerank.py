@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_application
-from app.schemas.search import SearchMode, SearchResultChunk
+from app.schemas.search import SearchResultChunk
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -424,128 +424,6 @@ def _vector_rows(n: int) -> list[dict]:
     ]
 
 
-class TestSearchEndpointRerank:
-    @patch("app.api.search.rerank_chunks")
-    @patch("app.api.search.hybrid_search")
-    def test_rerank_is_on_by_default(self, mock_hybrid, mock_rerank, client):
-        """Search reranks unless the caller says otherwise."""
-        candidates = _candidates(5)
-        mock_hybrid.return_value = MagicMock(
-            results=list(candidates), mode=SearchMode.hybrid, keyword_degraded=False
-        )
-        mock_rerank.return_value = MagicMock(chunks=candidates[:3], reranked=True)
-
-        resp = client.post("/api/search", json={"query": "q"}, headers=AUTH_HEADERS)
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["reranked"] is True
-        assert body["total_results"] == 3
-        assert mock_rerank.called
-
-    @patch("app.api.search.rerank_chunks")
-    @patch("app.api.search.hybrid_search")
-    def test_retrieves_deeper_so_the_reranker_has_a_choice(
-        self, mock_hybrid, mock_rerank, client
-    ):
-        """The candidate set is larger than top_k when reranking.
-
-        Fetching only top_k and then reranking would give the reranker
-        nothing to choose between — the bug this asserts against.
-        """
-        mock_hybrid.return_value = MagicMock(
-            results=_candidates(5), mode=SearchMode.hybrid, keyword_degraded=False
-        )
-        mock_rerank.return_value = MagicMock(chunks=_candidates(3), reranked=True)
-
-        resp = client.post(
-            "/api/search", json={"query": "q", "top_k": 3}, headers=AUTH_HEADERS
-        )
-
-        assert resp.status_code == 200
-        fetch_top_k = mock_hybrid.call_args[1]["top_k"]
-        assert fetch_top_k > 3
-        assert mock_rerank.call_args[1]["top_k"] == 3
-
-    @patch("app.api.search.rerank_chunks")
-    @patch("app.api.search.hybrid_search")
-    def test_no_rerank_fetches_exactly_top_k(
-        self, mock_hybrid, mock_rerank, client
-    ):
-        """With reranking off there is no reason to over-fetch."""
-        mock_hybrid.return_value = MagicMock(
-            results=_candidates(3), mode=SearchMode.hybrid, keyword_degraded=False
-        )
-
-        resp = client.post(
-            "/api/search",
-            json={"query": "q", "top_k": 3, "rerank": False},
-            headers=AUTH_HEADERS,
-        )
-
-        assert resp.status_code == 200
-        assert resp.json()["reranked"] is False
-        assert mock_hybrid.call_args[1]["top_k"] == 3
-        mock_rerank.assert_not_called()
-
-    @patch("app.api.search.rerank_chunks")
-    @patch("app.api.search.hybrid_search")
-    def test_degraded_rerank_reports_not_reranked(
-        self, mock_hybrid, mock_rerank, client
-    ):
-        """A reranker that fell back to retrieval order is not claimed as applied."""
-        mock_hybrid.return_value = MagicMock(
-            results=_candidates(5), mode=SearchMode.hybrid, keyword_degraded=False
-        )
-        mock_rerank.return_value = MagicMock(
-            chunks=_candidates(5), reranked=False
-        )
-
-        resp = client.post("/api/search", json={"query": "q"}, headers=AUTH_HEADERS)
-
-        assert resp.status_code == 200
-        assert resp.json()["reranked"] is False
-
-    @patch("app.api.search.rerank_chunks")
-    @patch("app.api.search.keyword_search")
-    def test_keyword_mode_skips_reranking(
-        self, mock_keyword, mock_rerank, client
-    ):
-        """Lexical ranking is already exact, so a reranker is skipped.
-
-        It would add latency and a Gemini dependency to the one mode that
-        deliberately works without an API key.
-        """
-        mock_keyword.return_value = _candidates(5)
-
-        resp = client.post(
-            "/api/search", json={"query": "q", "mode": "keyword"}, headers=AUTH_HEADERS
-        )
-
-        assert resp.status_code == 200
-        assert resp.json()["reranked"] is False
-        mock_rerank.assert_not_called()
-
-    @patch("app.api.search.rerank_chunks")
-    @patch("app.api.search.similarity_search")
-    def test_vector_mode_retrieves_deeper_when_reranking(
-        self, mock_vector, mock_rerank, client
-    ):
-        """The deeper fetch applies to vector mode too."""
-        mock_vector.return_value = _candidates(5)
-        mock_rerank.return_value = MagicMock(chunks=_candidates(2), reranked=True)
-
-        resp = client.post(
-            "/api/search",
-            json={"query": "q", "mode": "vector", "top_k": 2},
-            headers=AUTH_HEADERS,
-        )
-
-        assert resp.status_code == 200
-        assert mock_vector.call_args[1]["top_k"] > 2
-        assert resp.json()["reranked"] is True
-
-
 # ---------------------------------------------------------------------------
 # Chat pipeline integration
 # ---------------------------------------------------------------------------
@@ -576,19 +454,23 @@ class TestChatRerank:
     @patch("app.rag.pipeline.rerank_chunks")
     @patch("app.rag.pipeline.generate_answer")
     @patch("app.rag.pipeline.similarity_search")
-    def test_chat_does_not_rerank_by_default(
+    def test_chat_reranks_by_default(
         self, mock_search, mock_generate, mock_rerank
     ):
-        """Chat leaves reranking off: it costs a round-trip per turn."""
+        """Chat now reranks by default to improve precision with lower top_k."""
         from app.rag.pipeline import run_rag
 
         mock_search.return_value = _candidates(3)
         mock_generate.return_value = MagicMock(answer="a", cited_chunks=[])
+        mock_rerank.return_value = MagicMock(
+            chunks=_candidates(2), reranked=True
+        )
 
         run_rag(query="q", user_id=USER_ID, top_k=3)
 
-        assert mock_search.call_args[1]["top_k"] == 3
-        mock_rerank.assert_not_called()
+        # Candidates over-fetched due to rerank
+        assert mock_search.call_args[1]["top_k"] > 3
+        mock_rerank.assert_called_once()
 
     @patch("app.rag.pipeline.rerank_chunks")
     @patch("app.rag.pipeline.generate_answer")

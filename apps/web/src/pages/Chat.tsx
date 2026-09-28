@@ -26,9 +26,9 @@ export const Chat: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [papers, setPapers] = useState<Paper[]>([]);
   const [scopedPaperIds, setScopedPaperIds] = useState<string[]>([]);
-  // Off by default: reranking adds a model round-trip to every turn, so it
-  // is something a user opts into rather than pays for silently.
-  const [rerank, setRerank] = useState(false);
+  // On by default: with the smaller top_k the reranker is what keeps
+  // precision up, so it is something a user opts out of rather than in.
+  const [rerank, setRerank] = useState(true);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -185,8 +185,14 @@ export const Chat: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to ask question:', err);
-      // Drop the empty placeholder; a failed request has no answer to show.
-      setMessages((prev) => prev.filter((m) => m.id !== tempAssistantId));
+      // Keep the placeholder and show the reason in it: the request may
+      // already have produced sources, so dropping the bubble would leave
+      // the user with citations and no explanation. (A failed stream is
+      // never persisted server-side, so this text stays local.)
+      const message = err instanceof Error ? err.message : 'Failed to get an answer. Please try again.';
+      setMessages((prev) =>
+        prev.map((m) => (m.id === tempAssistantId ? { ...m, content: message } : m)),
+      );
     } finally {
       setIsLoading(false);
     }

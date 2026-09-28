@@ -72,7 +72,7 @@ export const Dashboard: React.FC = () => {
             Research Workspace
           </h1>
           <p className="text-sm text-text-secondary mt-1">
-            Grounded synthesis, page-level evidence, and multi-paper comparative analysis.
+            Upload papers, then ask grounded questions with page-level citations.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -98,7 +98,7 @@ export const Dashboard: React.FC = () => {
         {[
           { title: 'Papers Indexed', count: isLoading ? '...' : String(papers.length), icon: FileText, change: `${papers.length > 0 ? 'Loaded from library' : 'No papers yet'}` },
           { title: 'Chat Sessions', count: isLoading ? '...' : String(conversations.total), icon: MessageSquare, change: `${conversations.total > 0 ? 'Active conversations' : 'Start a new chat'}` },
-          { title: 'Ready for Synthesis', count: isLoading ? '...' : String(readyCount), icon: CheckCircle, change: `${papers.length > 0 ? `${Math.round((readyCount / Math.max(papers.length, 1)) * 100)}% processed` : '—'}` },
+          { title: 'Ready Papers', count: isLoading ? '...' : String(readyCount), icon: CheckCircle, change: `${papers.length > 0 ? `${Math.round((readyCount / Math.max(papers.length, 1)) * 100)}% processed` : '—'}` },
         ].map((stat) => {
           const Icon = stat.icon;
           return (
@@ -156,23 +156,17 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* Quick Launch Actions */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
         <Link to="/chat" className="group">
           <Card interactive className="h-full border-dashed hover:border-solid hover:border-accent">
             <h4 className="text-sm font-medium text-text-primary group-hover:text-accent transition-colors">Ask Grounded Questions</h4>
             <p className="text-xs text-text-secondary mt-1">Query single or multiple papers with exact citation page tracking.</p>
           </Card>
         </Link>
-        <Link to="/compare" className="group">
+        <Link to="/papers" className="group">
           <Card interactive className="h-full border-dashed hover:border-solid hover:border-accent">
-            <h4 className="text-sm font-medium text-text-primary group-hover:text-accent transition-colors">Compare Methodologies</h4>
-            <p className="text-xs text-text-secondary mt-1">Synthesize structured comparison tables across models, datasets, and metrics.</p>
-          </Card>
-        </Link>
-        <Link to="/research-gaps" className="group">
-          <Card interactive className="h-full border-dashed hover:border-solid hover:border-accent">
-            <h4 className="text-sm font-medium text-text-primary group-hover:text-accent transition-colors">Detect Research Gaps</h4>
-            <p className="text-xs text-text-secondary mt-1">Extract unresolved challenges, limitations, and future work opportunities.</p>
+            <h4 className="text-sm font-medium text-text-primary group-hover:text-accent transition-colors">Upload Papers</h4>
+            <p className="text-xs text-text-secondary mt-1">Add PDFs to your library so chat can ground answers in them.</p>
           </Card>
         </Link>
       </div>

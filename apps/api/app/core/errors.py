@@ -68,6 +68,12 @@ def ai_rate_limit_retry_after(exc: BaseException) -> int | None:
     """
     import math
     code = getattr(exc, "code", None)
+    if not isinstance(code, int):
+        # openai/groq errors (used by the fallback) carry the HTTP status
+        # on .status_code; their .code, when present, is a string like
+        # "model_not_found" and must not be mistaken for a status.
+        status = getattr(exc, "status_code", None)
+        code = status if isinstance(status, int) else None
     if code == 429:
         # Provider message contains "Please retry in 34.3s." — extract it.
         m = re.search(r"retry in (\d+(?:\.\d+)?)s", str(exc), re.IGNORECASE)

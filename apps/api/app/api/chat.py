@@ -58,7 +58,7 @@ class ChatRequest(BaseModel):
         default=None,
         description="Restrict RAG retrieval to these papers.  None = all user papers.",
     )
-    top_k: int = Field(default=8, ge=1, le=20)
+    top_k: int = Field(default=5, ge=1, le=20)
     similarity_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
     rerank: bool | None = Field(
         default=None,

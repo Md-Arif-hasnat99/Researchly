@@ -13,8 +13,9 @@ from app.rag.ingestion.extractor import PageText
 logger = logging.getLogger("researchly")
 
 # Default chunking parameters
-DEFAULT_CHUNK_SIZE = 800      # target characters per chunk
-DEFAULT_CHUNK_OVERLAP = 150  # overlap between consecutive chunks
+DEFAULT_CHUNK_SIZE = 500      # target chars per chunk
+# smaller = more chunks, fewer tokens per generation
+DEFAULT_CHUNK_OVERLAP = 100  # overlap between consecutive chunks
 
 # Heading patterns used for naive section detection
 _HEADING_RE = re.compile(

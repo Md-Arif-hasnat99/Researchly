@@ -5,7 +5,6 @@ import pytest
 from app.core.config import get_settings
 from app.schemas.conversation import ConversationCreate, MessageRole
 from app.schemas.paper import PaperCreate, PaperStatus, PaperUpdate
-from app.schemas.search import SearchRequest
 
 
 class TestSettings:
@@ -13,7 +12,7 @@ class TestSettings:
         settings = get_settings()
         assert settings.PROJECT_NAME == "Researchly API"
         assert settings.VERSION == "0.1.0"
-        assert settings.DEFAULT_TOP_K == 8
+        assert settings.DEFAULT_TOP_K == 5
         assert settings.DEFAULT_SIMILARITY_THRESHOLD == 0.65
 
     def test_cors_origins_are_list(self):
@@ -111,26 +110,3 @@ class TestConversationSchemas:
         paper_ids = [uuid.uuid4(), uuid.uuid4()]
         conv = ConversationCreate(title="RAG chat", paper_ids=paper_ids)
         assert len(conv.paper_ids) == 2
-
-
-class TestSearchSchemas:
-    def test_search_request_valid(self):
-        req = SearchRequest(query="What datasets were used?")
-        assert req.query == "What datasets were used?"
-        assert req.top_k == 8
-        assert req.similarity_threshold == 0.65
-
-    def test_search_request_custom_params(self):
-        req = SearchRequest(query="loss functions", top_k=5, similarity_threshold=0.75)
-        assert req.top_k == 5
-        assert req.similarity_threshold == 0.75
-
-    def test_search_request_empty_query_invalid(self):
-        with pytest.raises(Exception):
-            SearchRequest(query="")
-
-    def test_search_request_top_k_bounds(self):
-        with pytest.raises(Exception):
-            SearchRequest(query="test", top_k=0)
-        with pytest.raises(Exception):
-            SearchRequest(query="test", top_k=21)

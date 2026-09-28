@@ -8,15 +8,6 @@
 import { supabase } from './supabase';
 import type { Paper, PaperListResponse } from '../types/paper';
 import type { ChatResponse, ConversationListResponse, ConversationDetail } from '../types/chat';
-import type { SearchRequest, SearchResponse } from '../types/search';
-import type {
-  CompareRequest,
-  CompareResponse,
-  GapRequest,
-  GapResponse,
-  LiteratureReviewRequest,
-  LiteratureReviewResponse,
-} from '../types/research';
 
 const API_BASE = import.meta.env.VITE_API_URL as string | undefined ?? 'http://localhost:8000/api';
 
@@ -248,6 +239,17 @@ export async function streamQuestion(
   // Events are separated by a blank line; a chunk can end mid-frame, so
   // the tail is carried over rather than parsed on every read.
   let buffer = '';
+  // An in-band error event means the answer never came. Remember it and
+  // raise it below: resolving here would leave the caller showing sources
+  // with an empty answer and no explanation.
+  let streamError: ApiError | null = null;
+  const innerHandlers: StreamHandlers = {
+    ...handlers,
+    onError: (e) => {
+      if (e instanceof ApiError) streamError = e;
+      handlers.onError?.(e);
+    },
+  };
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -258,7 +260,7 @@ export async function streamQuestion(
       while ((split = buffer.indexOf('\n\n')) !== -1) {
         const frame = buffer.slice(0, split);
         buffer = buffer.slice(split + 2);
-        dispatchFrame(frame, handlers, (text) => {
+        dispatchFrame(frame, innerHandlers, (text) => {
           answer += text;
         }, (c) => { citations = c; }, (m, r) => {
           messageId = m;
@@ -266,7 +268,11 @@ export async function streamQuestion(
         });
       }
     }
+    if (streamError) throw streamError;
   } catch (err) {
+    // A recorded in-band failure explains the outcome better than a
+    // transport error that only finished it off.
+    if (streamError) throw streamError;
     // The connection dropped mid-answer. Whatever arrived is kept, so the
     // user does not lose the partial response they were reading.
     const error = err instanceof Error ? err : new Error('Stream failed');
@@ -361,81 +367,4 @@ export async function deleteConversation(id: string): Promise<void> {
     headers,
   });
   return handleResponse<void>(res);
-}
-
-// ---------------------------------------------------------------------------
-// Search API
-// ---------------------------------------------------------------------------
-
-/**
- * Search the paper library. Defaults to hybrid retrieval (FR-14), which
- * fuses vector and keyword results so exact model names, abbreviations,
- * and dataset names are findable alongside conceptual matches.
- *
- * Each result carries `matched_by` so the UI can explain why it came
- * back, and the response `mode` reflects the retriever that actually ran.
- */
-export async function searchPapers(request: SearchRequest): Promise<SearchResponse> {
-  const headers = await getAuthHeaders();
-  headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${API_BASE}/search`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(request),
-  });
-  return handleResponse<SearchResponse>(res);
-}
-
-// ---------------------------------------------------------------------------
-// Research API
-// ---------------------------------------------------------------------------
-
-/**
- * Compare two to six papers across chosen aspects.
- * Returns a matrix with one row per aspect and one cell per paper;
- * each cell carries its source page and chunk for traceability.
- */
-export async function comparePapers(request: CompareRequest): Promise<CompareResponse> {
-  const headers = await getAuthHeaders();
-  headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${API_BASE}/research/compare`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(request),
-  });
-  return handleResponse<CompareResponse>(res);
-}
-
-/**
- * Generate a structured, multi-section literature review across papers.
- * Sections the retrieved context could not support come back flagged
- * as `insufficient_context` rather than padded with invented prose.
- */
-export async function generateLiteratureReview(
-  request: LiteratureReviewRequest
-): Promise<LiteratureReviewResponse> {
-  const headers = await getAuthHeaders();
-  headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${API_BASE}/research/literature-review`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(request),
-  });
-  return handleResponse<LiteratureReviewResponse>(res);
-}
-
-/**
- * Identify recurring research gaps across papers, clustered by FR-13
- * category. Gaps arrive with server-resolved source citations, and gaps
- * that could not be grounded are omitted rather than guessed.
- */
-export async function identifyResearchGaps(request: GapRequest): Promise<GapResponse> {
-  const headers = await getAuthHeaders();
-  headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${API_BASE}/research/gaps`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(request),
-  });
-  return handleResponse<GapResponse>(res);
 }

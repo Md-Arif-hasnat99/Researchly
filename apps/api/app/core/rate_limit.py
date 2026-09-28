@@ -53,8 +53,6 @@ EXEMPT_PATHS = frozenset({"/api/health", "/api/health/ready"})
 #: cannot escape the limit by adding a path segment.
 EXPENSIVE_PREFIXES = (
     "/api/chat",
-    "/api/search",
-    "/api/research",
     "/api/papers",
 )
 

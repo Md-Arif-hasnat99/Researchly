@@ -195,6 +195,104 @@ class TestCallSitesRetry:
         assert len(attempts) == 2
         assert sleeps == [1.0]
 
+    def test_generate_answer_does_not_retry_quota_errors(self, monkeypatch):
+        """A 429 carries the provider's own backoff, so retrying it only
+        burns more quota and delays the honest answer."""
+        from app.rag.generation import gemini as gemini_module
+
+        attempts: list[int] = []
+        sleeps: list[float] = []
+
+        class _QuotaExceeded(Exception):
+            code = 429
+
+            def __str__(self) -> str:
+                return (
+                    "429 RESOURCE_EXHAUSTED. Quota exceeded for metric "
+                    "generate_content_free_tier_requests. Please retry in 47s."
+                )
+
+        class _Models:
+            def generate_content(self, **kwargs):
+                attempts.append(1)
+                raise _QuotaExceeded()
+
+        class _Client:
+            def __init__(self, api_key=None):
+                self.models = _Models()
+
+        monkeypatch.setattr(gemini_module, "genai", SimpleNamespace(Client=_Client))
+        monkeypatch.setattr(gemini_module, "get_settings", lambda: SimpleNamespace(
+            GEMINI_API_KEY="test-key",
+            GEMINI_GENERATION_MODEL="test-model",
+        ))
+        monkeypatch.setattr(time, "sleep", sleeps.append)
+
+        from app.schemas.search import SearchResultChunk
+
+        chunk = SearchResultChunk(
+            chunk_id=str(uuid4()),
+            paper_id=str(uuid4()),
+            paper_title="Test Paper",
+            page_number=1,
+            section=None,
+            content="some content",
+            similarity_score=0.9,
+            matched_by=["vector"],
+        )
+        with pytest.raises(_QuotaExceeded):
+            gemini_module.generate_answer("what is this?", [chunk])
+
+        assert len(attempts) == 1
+        assert sleeps == []
+
+    def test_stream_answer_does_not_retry_quota_errors(self, monkeypatch):
+        """Same rule for the streaming path: fail fast on quota errors."""
+        from app.rag.generation import gemini as gemini_module
+
+        attempts: list[int] = []
+        sleeps: list[float] = []
+
+        class _QuotaExceeded(Exception):
+            code = 429
+
+            def __str__(self) -> str:
+                return "429 RESOURCE_EXHAUSTED. Please retry in 47s."
+
+        class _Models:
+            def generate_content_stream(self, **kwargs):
+                attempts.append(1)
+                raise _QuotaExceeded()
+
+        class _Client:
+            def __init__(self, api_key=None):
+                self.models = _Models()
+
+        monkeypatch.setattr(gemini_module, "genai", SimpleNamespace(Client=_Client))
+        monkeypatch.setattr(gemini_module, "get_settings", lambda: SimpleNamespace(
+            GEMINI_API_KEY="test-key",
+            GEMINI_GENERATION_MODEL="test-model",
+        ))
+        monkeypatch.setattr(time, "sleep", sleeps.append)
+
+        from app.schemas.search import SearchResultChunk
+
+        chunk = SearchResultChunk(
+            chunk_id=str(uuid4()),
+            paper_id=str(uuid4()),
+            paper_title="Test Paper",
+            page_number=1,
+            section=None,
+            content="some content",
+            similarity_score=0.9,
+            matched_by=["vector"],
+        )
+        with pytest.raises(_QuotaExceeded):
+            list(gemini_module.stream_answer("what is this?", [chunk]))
+
+        assert len(attempts) == 1
+        assert sleeps == []
+
     def test_rerank_falls_back_when_the_call_keeps_failing(self, monkeypatch):
         """A failed reranker must not fail the search — retries first, then order."""
         from app.rag.retrieval import rerank as rerank_module
@@ -259,7 +357,7 @@ class TestErrorEnvelope:
         assert body["error"]["message"]
 
     def test_validation_errors_read_as_a_sentence(self, client):
-        resp = client.post("/api/search", json={}, headers=AUTH_HEADERS)
+        resp = client.post("/api/chat", json={}, headers=AUTH_HEADERS)
 
         assert resp.status_code == 422
         body = resp.json()
@@ -270,7 +368,7 @@ class TestErrorEnvelope:
         assert "query" in message
 
     def test_route_level_errors_keep_their_code_and_message(self, client):
-        resp = client.post("/api/search", json={}, headers=AUTH_HEADERS)
+        resp = client.post("/api/chat", json={}, headers=AUTH_HEADERS)
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
     def test_unhandled_exception_returns_the_shape_with_a_traceback(self, caplog):
