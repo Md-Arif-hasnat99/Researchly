@@ -99,6 +99,26 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
+// System API
+// ---------------------------------------------------------------------------
+
+/**
+ * Fire-and-forget health ping sent when the app loads.
+ *
+ * The backend on Render's free tier sleeps after ~15 min without
+ * traffic, and the first request then pays a 30-60s cold start.
+ * Hitting GET /api/health as soon as the frontend opens starts that
+ * wake-up while the page is still loading, so the user's first real
+ * action (upload, chat) lands on an already-warm instance.
+ *
+ * Deliberately ignores every failure: the ping is an optimisation,
+ * never something the UI should block or surface an error for.
+ */
+export function warmBackend(): void {
+  fetch(`${API_BASE}/health`, { keepalive: true }).catch(() => undefined);
+}
+
+// ---------------------------------------------------------------------------
 // Papers API
 // ---------------------------------------------------------------------------
 

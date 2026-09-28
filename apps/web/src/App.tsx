@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { warmBackend } from './lib/api';
 import { AppShell } from './components/layout/AppShell';
 import { ProtectedRoute } from './components/layout/ProtectedRoute';
 import { Dashboard } from './pages/Dashboard';
@@ -12,6 +13,12 @@ import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 
 export const App: React.FC = () => {
+  // Ping the backend on every page load so a sleeping (free-tier)
+  // instance starts warming while the app is still rendering.
+  useEffect(() => {
+    warmBackend();
+  }, []);
+
   return (
     <BrowserRouter>
       <AuthProvider>
