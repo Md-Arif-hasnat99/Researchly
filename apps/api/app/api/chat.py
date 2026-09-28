@@ -28,7 +28,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from app.core.errors import safe_error_message, ai_rate_limit_retry_after
+from app.core.errors import ai_rate_limit_retry_after
 from app.core.logging import logger
 from app.core.security import CurrentUser
 from app.core.supabase import get_supabase_client
@@ -237,9 +237,13 @@ def _raise_retrieval_failure(exc: Exception) -> None:
     retry_after = ai_rate_limit_retry_after(exc)
     if retry_after is not None:
         logger.warning("AI service rate limited: %s", exc)
+        rate_limited = (
+            "The AI service is at its request limit right now. "
+            f"Please try again in {retry_after}s."
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"The AI service is at its request limit right now. Please try again in {retry_after}s.",
+            detail=rate_limited,
             headers={"Retry-After": str(retry_after)},
         ) from exc
 
@@ -402,7 +406,10 @@ def chat_stream(
                     "error",
                     {
                         "code": "RATE_LIMITED",
-                        "message": f"The AI service is at its request limit right now. Please try again in {retry_after}s.",
+                        "message": (
+                            "The AI service is at its request limit right now. "
+                            f"Please try again in {retry_after}s."
+                        ),
                         "retry_after": retry_after,
                     },
                 )
