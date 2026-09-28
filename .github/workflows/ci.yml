@@ -21,33 +21,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
-
-      - name: Cache pnpm store
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
+          cache: 'npm'
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: npm ci
 
       - name: Typecheck shared package
-        run: pnpm --filter @researchly/shared build
+        run: npm run build -w @researchly/shared
 
       - name: Run frontend tests
-        run: pnpm --filter web test run
+        run: npm run test -w web -- run
 
       - name: Build frontend application
-        run: pnpm --filter web build
+        run: npm run build -w web
 
   backend:
     name: Backend (Lint, Test)

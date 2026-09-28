@@ -1,11 +1,14 @@
 {
   "name": "researchly",
   "private": true,
-  "packageManager": "pnpm@10.0.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "dev": "pnpm --filter web dev",
-    "build": "pnpm --filter \"@researchly/*\" build && pnpm --filter web build",
-    "test": "pnpm --filter web test run",
-    "lint": "pnpm --filter web lint"
+    "dev": "npm run dev -w web",
+    "build": "npm run build -w @researchly/shared && npm run build -w web",
+    "test": "npm run test -w web -- run",
+    "lint": "npm run lint -w web"
   }
 }

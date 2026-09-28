@@ -2,10 +2,9 @@ docs/PRD.md
 docs/architecture.md
 docs/design.md
 
-# Node / pnpm
+# Node / npm
 node_modules/
 dist/
-.pnpm-store/
 
 # Python
 __pycache__/
