@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.schemas.conversation import ConversationCreate, MessageRole
 from app.schemas.paper import PaperCreate, PaperStatus, PaperUpdate
 
@@ -110,3 +110,32 @@ class TestConversationSchemas:
         paper_ids = [uuid.uuid4(), uuid.uuid4()]
         conv = ConversationCreate(title="RAG chat", paper_ids=paper_ids)
         assert len(conv.paper_ids) == 2
+
+
+class TestCorsOriginsParsing:
+    """CORS_ORIGINS must accept every spelling a deploy dashboard allows.
+
+    pydantic-settings only JSON-decodes complex fields, so entering a
+    plain origin (``CORS_ORIGINS=https://app.example.com``) used to
+    abort the boot with ``SettingsError: error parsing value for field
+    "CORS_ORIGINS"`` — a deployment that cannot start over a value the
+    operator reasonably typed correctly.
+    """
+
+    def test_plain_origin_string(self):
+        settings = Settings(CORS_ORIGINS="https://app.example.com")
+        assert settings.CORS_ORIGINS == ["https://app.example.com"]
+
+    def test_comma_separated_origins(self):
+        settings = Settings(
+            CORS_ORIGINS="https://a.example.com, https://b.example.com"
+        )
+        assert settings.CORS_ORIGINS == ["https://a.example.com", "https://b.example.com"]
+
+    def test_json_array_still_works(self):
+        settings = Settings(CORS_ORIGINS='["https://app.example.com"]')
+        assert settings.CORS_ORIGINS == ["https://app.example.com"]
+
+    def test_list_passthrough(self):
+        settings = Settings(CORS_ORIGINS=["https://app.example.com"])
+        assert settings.CORS_ORIGINS == ["https://app.example.com"]

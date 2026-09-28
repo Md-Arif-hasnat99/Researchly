@@ -1,6 +1,7 @@
+import json
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Environments the app is allowed to run as. A typo in ENVIRONMENT must
@@ -112,6 +113,29 @@ class Settings(BaseSettings):
     @property
     def IS_PRODUCTION(self) -> bool:
         return self.ENVIRONMENT == "production"
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, value: object) -> object:
+        """Accept a JSON array or a plain list of origins.
+
+        pydantic-settings only JSON-decodes complex fields, so setting
+        ``CORS_ORIGINS=https://app.example.com`` in a deployment
+        dashboard - the natural thing to type - crashed the boot with
+        ``SettingsError: error parsing value for field "CORS_ORIGINS"``
+        instead of configuring CORS. The dashboard-friendly forms (a
+        bare origin, or origins separated by commas) are normalised
+        here so both spellings work.
+        """
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if text.startswith("["):
+            # Explicit JSON: let the JSON error surface if it is malformed
+            # rather than silently guessing at the author's intent.
+            return json.loads(text)
+        parts = [part.strip().strip("\"'") for part in text.split(",")]
+        return [part for part in parts if part]
 
     @model_validator(mode="after")
     def _reject_unsafe_production_settings(self) -> "Settings":
