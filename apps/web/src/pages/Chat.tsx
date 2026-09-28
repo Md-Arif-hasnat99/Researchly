@@ -4,6 +4,7 @@ import { Button } from '../components/ui/Button';
 import { Send, FileText, MessageSquare, Plus, Trash2, Loader2, Sparkles } from 'lucide-react';
 import { listConversations, getConversation, streamQuestion, deleteConversation, listPapers } from '../lib/api';
 import { PaperScopeSelector } from '../components/chat/PaperScopeSelector';
+import { MarkdownContent } from '../components/chat/MarkdownContent';
 import type { Conversation, Message, ChatCitation } from '../types/chat';
 import type { Paper } from '../types/paper';
 
@@ -277,13 +278,13 @@ export const Chat: React.FC = () => {
               className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}
             >
               <div
-                className={`max-w-3xl rounded-xl p-4 text-sm leading-relaxed whitespace-pre-wrap ${
+                className={`max-w-3xl rounded-xl p-4 text-sm leading-relaxed ${
                   m.role === 'user'
-                    ? 'bg-accent text-white'
+                    ? 'bg-accent text-white whitespace-pre-wrap'
                     : 'bg-background border border-border text-text-primary'
                 }`}
               >
-                {m.content}
+                {m.role === 'user' ? m.content : <MarkdownContent>{m.content}</MarkdownContent>}
               </div>
 
               {m.reranked && (

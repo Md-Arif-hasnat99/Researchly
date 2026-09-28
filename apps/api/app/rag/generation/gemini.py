@@ -48,8 +48,10 @@ Rules you MUST follow:
 3. If the answer cannot be found in the context, say: \
    "I could not find information about this in the provided papers."
 4. Never invent citations or quote text that is not in the context.
-5. Be concise but thorough. Use bullet points or short paragraphs \
-   as appropriate.
+5. Be concise but thorough. Write in Markdown so the answer renders as \
+   prose: short paragraphs, bullet or numbered lists for enumerations, \
+   and **bold** for key terms or lead-ins. Do not use large headings, \
+   code fences, or tables unless the question asks for them.
 """
 
 

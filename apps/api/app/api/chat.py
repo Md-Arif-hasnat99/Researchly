@@ -28,6 +28,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.errors import safe_error_message, ai_rate_limit_retry_after
 from app.core.logging import logger
 from app.core.security import CurrentUser
 from app.core.supabase import get_supabase_client
@@ -233,6 +234,15 @@ def _raise_retrieval_failure(exc: Exception) -> None:
     missing), so it is logged for the operator and the user gets a message
     that does not describe the server's wiring.
     """
+    retry_after = ai_rate_limit_retry_after(exc)
+    if retry_after is not None:
+        logger.warning("AI service rate limited: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"The AI service is at its request limit right now. Please try again in {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        ) from exc
+
     if isinstance(exc, RuntimeError):
         logger.error("RAG pipeline config error: %s", exc, exc_info=True)
         raise HTTPException(
@@ -385,9 +395,19 @@ def chat_stream(
                 collected.append(text)
                 yield _sse("token", {"text": text})
         except Exception as exc:  # noqa: BLE001
-            # The status line is long gone, so the error has to travel in
-            # the body. Deliberately generic for the same reason as the
-            # buffered path: the cause is logged, not returned.
+            retry_after = ai_rate_limit_retry_after(exc)
+            if retry_after is not None:
+                logger.warning("AI service rate limited during streaming: %s", exc)
+                yield _sse(
+                    "error",
+                    {
+                        "code": "RATE_LIMITED",
+                        "message": f"The AI service is at its request limit right now. Please try again in {retry_after}s.",
+                        "retry_after": retry_after,
+                    },
+                )
+                return
+
             logger.error("Streaming answer failed: %s", exc, exc_info=True)
             yield _sse(
                 "error",

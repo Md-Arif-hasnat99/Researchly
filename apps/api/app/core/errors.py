@@ -54,3 +54,26 @@ def safe_error_message(
     if not scrubbed:
         return fallback
     return scrubbed[:max_length]
+
+
+def ai_rate_limit_retry_after(exc: BaseException) -> int | None:
+    """Retry-After seconds when *exc* is a Gemini quota/throughput failure, else None.
+
+    google-genai raises ClientError with code 429 for both per-minute
+    throughput limits and the free tier's daily request quota. The
+    provider's own RetryInfo ("Please retry in 34.3s") is the only
+    number that knows which limit was hit, so it is read first and a
+    60s floor is used when it is absent. Code 503 (overloaded) is also
+    treated as a capacity error with a 60s fallback.
+    """
+    import math
+    code = getattr(exc, "code", None)
+    if code == 429:
+        # Provider message contains "Please retry in 34.3s." — extract it.
+        m = re.search(r"retry in (\d+(?:\.\d+)?)s", str(exc), re.IGNORECASE)
+        if m:
+            return max(1, math.ceil(float(m.group(1))) + 1)
+        return 60
+    if code == 503:
+        return 60
+    return None
