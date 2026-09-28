@@ -1,7 +1,5 @@
 """Tests for the AI rate-limit error mapping helper (pure unit tests)."""
 
-import pytest
-
 from app.core.errors import ai_rate_limit_retry_after
 
 
