@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # change with no code edit.
     GEMINI_EMBEDDING_MODEL: str = "models/gemini-embedding-001"
     GEMINI_GENERATION_MODEL: str = "models/gemini-3.8-flash"
+
+    # Groq fallback (OpenAI-compatible API). Optional — if GROQ_API_KEY
+    # is set, the generation module will fall back to Groq when Gemini
+    # returns 429/500/503. Groq models are OpenAI-compatible; pick one
+    # that supports your desired context length.
+    GROQ_API_KEY: str = ""
+    GROQ_GENERATION_MODEL: str = "llama-3.3-70b-versatile"
     DEFAULT_TOP_K: int = 8
     DEFAULT_SIMILARITY_THRESHOLD: float = 0.65
 

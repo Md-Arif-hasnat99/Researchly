@@ -1,7 +1,8 @@
-"""Grounded answer generation using Gemini.
+"""Grounded answer generation using Gemini with Groq fallback.
 
 Receives a user query and the retrieved context chunks, builds a
-grounded prompt, calls Gemini, and returns a plain-text answer.
+grounded prompt, calls Gemini first, and falls back to Groq on
+quota/availability errors (429, 500, 503).
 
 Grounding rules (enforced in the system prompt):
 - Use only information from the supplied context.
@@ -18,9 +19,11 @@ import logging
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import Optional
 
 import google.genai as genai
 import google.genai.types as genai_types
+from openai import OpenAI
 
 from app.core.config import get_settings
 from app.core.retry import with_retry
@@ -32,6 +35,31 @@ logger = logging.getLogger("researchly")
 # output has been emitted (see stream_answer).
 _MAX_RETRIES = 3
 _BASE_DELAY_S = 1.0
+
+# Which Google-genai exception codes should trigger a Groq fallback.
+_FALLBACK_CODES = frozenset({429, 500, 503})
+
+
+def _get_groq_client() -> Optional[OpenAI]:
+    """Return a configured OpenAI client pointed at Groq, or None if not configured."""
+    settings = get_settings()
+    if not settings.GROQ_API_KEY:
+        return None
+    return OpenAI(
+        api_key=settings.GROQ_API_KEY,
+        base_url="https://api.groq.com/openai/v1",
+    )
+
+
+def _should_fallback(exc: BaseException) -> bool:
+    """Return True if *exc* looks like a retriable provider error."""
+    # google-genai wraps errors; check .code if present
+    code = getattr(exc, "code", None)
+    if code in _FALLBACK_CODES:
+        return True
+    # Also check error message for common patterns
+    msg = str(exc).lower()
+    return any(kw in msg for kw in ("rate limit", "quota", "capacity", "unavailable", "overloaded"))
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -119,6 +147,73 @@ def _require_api_key() -> None:
         )
 
 
+def _generate_with_groq(query: str, context_block: str, chunks: list[SearchResultChunk]) -> GeneratedAnswer:
+    """Generate answer using Groq as fallback."""
+    client = _get_groq_client()
+    if client is None:
+        raise RuntimeError("GROQ_API_KEY not configured; cannot fall back to Groq.")
+
+    settings = get_settings()
+    model = settings.GROQ_GENERATION_MODEL
+    prompt = _build_prompt(query, _build_context_block(chunks))
+
+    logger.info("Groq fallback generation | model=%s chunks=%d query=%r", model, len(chunks), query[:80])
+
+    response = client.chat.completions.create(
+        model=settings.GROQ_GENERATION_MODEL,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+        max_tokens=2048,
+    )
+
+    answer_text = response.choices[0].message.content or ""
+    logger.info("Groq generation complete — %d chars", len(answer_text))
+    return GeneratedAnswer(answer=answer_text, cited_chunks=chunks)
+
+
+def _stream_with_groq(query: str, chunks: list[SearchResultChunk]) -> Iterator[str]:
+    """Stream answer from Groq as fallback."""
+    client = _get_groq_client()
+    if client is None:
+        raise RuntimeError("GROQ_API_KEY not configured; cannot fall back to Groq.")
+
+    settings = get_settings()
+    context_block = _build_context_block(chunks)
+    prompt = _build_prompt(query, context_block)
+
+    logger.info("Groq fallback streaming | model=%s chunks=%d query=%r",
+                settings.GROQ_GENERATION_MODEL, len(chunks), query[:80])
+
+    stream = client.chat.completions.create(
+        model=settings.GROQ_GENERATION_MODEL,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+        max_tokens=2048,
+        stream=True,
+    )
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta
+        if delta.content:
+            yield delta.content
+    logger.info("Groq stream complete")
+
+
+def _require_api_key() -> None:
+    settings = get_settings()
+    if not settings.GEMINI_API_KEY:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not configured. "
+            "Set it in your .env file to enable answer generation."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -166,24 +261,32 @@ def generate_answer(
         query[:80],
     )
 
-    response = with_retry(
-        lambda: client.models.generate_content(
-            model=model,
-            contents=[
-                genai_types.Content(
-                    role="user",
-                    parts=[genai_types.Part(text=prompt)],
-                )
-            ],
-            config=_generation_config(),
-        ),
-        label="answer generation",
-    )
+    try:
+        response = with_retry(
+            lambda: client.models.generate_content(
+                model=model,
+                contents=[
+                    genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text=prompt)],
+                    )
+                ],
+                config=_generation_config(),
+            ),
+            label="answer generation",
+        )
 
-    answer_text: str = response.text or ""
-    logger.info("Generation complete — %d chars", len(answer_text))
+        answer_text: str = response.text or ""
+        logger.info("Generation complete — %d chars", len(answer_text))
 
-    return GeneratedAnswer(answer=answer_text, cited_chunks=chunks)
+        return GeneratedAnswer(answer=answer_text, cited_chunks=chunks)
+
+    except Exception as exc:  # noqa: BLE001
+        if _should_fallback(exc):
+            logger.warning("Gemini generation failed (%s); falling back to Groq", exc)
+            return _generate_with_groq(query, _build_context_block(chunks), chunks)
+        logger.error("Generation failed with non-fallback error: %s", exc)
+        raise
 
 
 def stream_answer(
@@ -258,11 +361,20 @@ def stream_answer(
             logger.info("Stream complete")
             return
         except Exception as exc:  # noqa: BLE001
-            if emitted or attempt >= _MAX_RETRIES:
-                # Either the client already has part of the answer, or we
-                # are out of attempts. Re-raising ends the stream with a
-                # real error instead of silently truncating the answer.
-                logger.error("Answer stream failed after output began: %s", exc)
+            # If we already emitted text, we can't safely switch to Groq mid-stream.
+            if emitted:
+                logger.error("Stream failed after output began: %s", exc)
+                raise
+
+            # No output yet — check if we should fall back to Groq.
+            if _should_fallback(exc):
+                logger.warning("Gemini stream failed before any output (%s); falling back to Groq stream", exc)
+                yield from _stream_with_groq(query, chunks)
+                return
+
+            # Not a fallback error — apply retry logic.
+            if attempt >= _MAX_RETRIES:
+                logger.error("Stream failed after %d retries: %s", attempt, exc)
                 raise
             attempt += 1
             delay = _BASE_DELAY_S * (2 ** (attempt - 1))
