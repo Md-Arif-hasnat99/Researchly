@@ -5,7 +5,6 @@ from supabase import Client, create_client
 from app.core.config import get_settings
 from app.core.logging import logger
 
-
 _supabase_service_client: Client | None = None
 _supabase_anon_client: Client | None = None
 

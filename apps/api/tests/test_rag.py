@@ -88,7 +88,9 @@ class TestGenerationModule:
     @patch("app.rag.generation.gemini.get_settings")
     @patch("app.rag.generation.gemini._get_gemini_client")
     @patch("app.rag.generation.gemini.genai.Client")
-    def test_multiple_chunks_passed_in_context(self, mock_client_cls, mock_get_client, mock_settings):
+    def test_multiple_chunks_passed_in_context(
+        self, mock_client_cls, mock_get_client, mock_settings
+    ):
         mock_settings.return_value.GEMINI_API_KEY = "key"
         mock_settings.return_value.GEMINI_GENERATION_MODEL = "gemini-test"
 
