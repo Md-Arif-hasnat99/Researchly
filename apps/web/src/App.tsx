@@ -1,16 +1,25 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { warmBackend } from './lib/api';
 import { AppShell } from './components/layout/AppShell';
 import { ProtectedRoute } from './components/layout/ProtectedRoute';
 import { Dashboard } from './pages/Dashboard';
-import { Papers } from './pages/Papers';
-import { PaperDetail } from './pages/PaperDetail';
-import { Chat } from './pages/Chat';
-import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+
+// Lazy load heavy routes to reduce initial bundle size
+const Papers = lazy(() => import('./pages/Papers').then(m => ({ default: m.Papers })));
+const PaperDetail = lazy(() => import('./pages/PaperDetail').then(m => ({ default: m.PaperDetail })));
+const Chat = lazy(() => import('./pages/Chat').then(m => ({ default: m.Chat })));
+const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })));
+
+// Lightweight loading fallback
+const RouteLoading = () => (
+  <div className="flex items-center justify-center h-64">
+    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+  </div>
+);
 
 export const App: React.FC = () => {
   // Ping the backend on every page load so a sleeping (free-tier)
@@ -38,11 +47,46 @@ export const App: React.FC = () => {
           >
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
-            <Route path="papers" element={<Papers />} />
-            <Route path="papers/:id" element={<PaperDetail />} />
-            <Route path="chat" element={<Chat />} />
-            <Route path="chat/:conversationId" element={<Chat />} />
-            <Route path="settings" element={<Settings />} />
+            <Route
+              path="papers"
+              element={
+                <Suspense fallback={<RouteLoading />}>
+                  <Papers />
+                </Suspense>
+              }
+            />
+            <Route
+              path="papers/:id"
+              element={
+                <Suspense fallback={<RouteLoading />}>
+                  <PaperDetail />
+                </Suspense>
+              }
+            />
+            <Route
+              path="chat"
+              element={
+                <Suspense fallback={<RouteLoading />}>
+                  <Chat />
+                </Suspense>
+              }
+            />
+            <Route
+              path="chat/:conversationId"
+              element={
+                <Suspense fallback={<RouteLoading />}>
+                  <Chat />
+                </Suspense>
+              }
+            />
+            <Route
+              path="settings"
+              element={
+                <Suspense fallback={<RouteLoading />}>
+                  <Settings />
+                </Suspense>
+              }
+            />
           </Route>
 
           {/* Fallback */}
