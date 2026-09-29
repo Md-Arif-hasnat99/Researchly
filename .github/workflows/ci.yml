@@ -15,7 +15,7 @@ jobs:
     name: Install Dependencies
     runs-on: ubuntu-latest
     outputs:
-      node-cache-key: ${{ steps.node-cache.outputs.cache-primary-key }}
+      node_cache_key: ${{ steps.node-cache.outputs.cache-primary-key }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -56,7 +56,7 @@ jobs:
             node_modules
             apps/web/node_modules
             packages/shared/node_modules
-          key: ${{ needs.install.outputs.node-cache-key }}
+          key: ${{ needs.install.outputs.node_cache_key }}
 
       - name: Typecheck shared package
         run: npm run build -w @researchly/shared
