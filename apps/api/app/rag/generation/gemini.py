@@ -32,6 +32,28 @@ from app.schemas.search import SearchResultChunk
 
 logger = logging.getLogger("researchly")
 
+# Module-level cached Gemini client to avoid re-instantiation on each request
+_gemini_client: genai.Client | None = None
+
+
+def _get_gemini_client() -> genai.Client:
+    """Return a cached Gemini client instance."""
+    global _gemini_client
+    if _gemini_client is None:
+        settings = get_settings()
+        _gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        logger.info("Gemini client initialized.")
+    return _gemini_client
+
+
+def _reset_gemini_client() -> None:
+    """Reset the cached Gemini client (for testing only)."""
+    global _gemini_client
+    if _gemini_client is not None:
+        _gemini_client = None
+        logger.debug("Gemini client cache cleared.")
+
+
 # Retry configuration for the streaming path, which retries only while no
 # output has been emitted (see stream_answer).
 _MAX_RETRIES = 3
@@ -202,7 +224,7 @@ def generate_answer(
     prompt = _build_prompt(query, context_block)
 
     settings = get_settings()
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    client = _get_gemini_client()
     model = settings.GEMINI_GENERATION_MODEL
 
     logger.info(
@@ -282,7 +304,7 @@ def stream_answer(
     prompt = _build_prompt(query, context_block)
 
     settings = get_settings()
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    client = _get_gemini_client()
     model = settings.GEMINI_GENERATION_MODEL
 
     logger.info(
