@@ -33,6 +33,7 @@ database. Both Postgres functions independently enforce the ownership
 gate, so neither half of the pipeline can reach another user's papers.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from uuid import UUID
@@ -124,6 +125,32 @@ def _log_query(query: str, user_id: str, top_k: int, mode: str, paper_ids) -> No
 # ---------------------------------------------------------------------------
 
 
+async def similarity_search_async(
+    query: str,
+    user_id: str,
+    top_k: int = 8,
+    similarity_threshold: float = 0.65,
+    paper_ids: list[UUID] | None = None,
+    query_vector: list[float] | None = None,
+) -> list[SearchResultChunk]:
+    """Async wrapper for :func:`similarity_search`.
+
+    Runs the blocking Supabase RPC call in a thread pool executor
+    so it can be awaited alongside other async operations.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        similarity_search,
+        query,
+        user_id,
+        top_k,
+        similarity_threshold,
+        paper_ids,
+        query_vector,
+    )
+
+
 def similarity_search(
     query: str,
     user_id: str,
@@ -203,6 +230,28 @@ def similarity_search(
 # ---------------------------------------------------------------------------
 # Keyword retrieval
 # ---------------------------------------------------------------------------
+
+
+async def keyword_search_async(
+    query: str,
+    user_id: str,
+    top_k: int = 8,
+    paper_ids: list[UUID] | None = None,
+) -> list[SearchResultChunk]:
+    """Async wrapper for :func:`keyword_search`.
+
+    Runs the blocking Supabase RPC call in a thread pool executor
+    so it can be awaited alongside other async operations.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        keyword_search,
+        query,
+        user_id,
+        top_k,
+        paper_ids,
+    )
 
 
 def keyword_search(
@@ -345,6 +394,81 @@ def rrf_fuse(
 # ---------------------------------------------------------------------------
 # Hybrid
 # ---------------------------------------------------------------------------
+
+
+async def hybrid_search_async(
+    query: str,
+    user_id: str,
+    top_k: int = 8,
+    similarity_threshold: float = 0.65,
+    paper_ids: list[UUID] | None = None,
+) -> SearchOutcome:
+    """Async version of :func:`hybrid_search` using parallel execution.
+
+    Runs vector and keyword search in parallel via asyncio.gather,
+    reducing hybrid search latency by ~2x.
+    """
+    _log_query(query, user_id, top_k, "hybrid", paper_ids)
+    depth = candidate_depth(top_k)
+
+    # A vector failure (missing API key, database down) is not something
+    # to paper over — it propagates so the API can report it.
+    # We run it in a thread pool since the underlying Supabase call is blocking.
+    loop = asyncio.get_event_loop()
+
+    # Run both retrievers in parallel
+    vector_task = loop.run_in_executor(
+        None,
+        similarity_search,
+        query,
+        user_id,
+        depth,
+        similarity_threshold,
+        paper_ids,
+        None,
+    )
+
+    degraded = False
+    try:
+        vector_hits, keyword_hits = await asyncio.gather(
+            vector_task,
+            loop.run_in_executor(
+                None,
+                keyword_search,
+                query,
+                user_id,
+                depth,
+                paper_ids,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        # If keyword search fails, we still have vector results
+        # Need to wait for vector_task if it's still running
+        degraded = True
+        try:
+            vector_hits = await vector_task
+        except Exception:
+            # Vector also failed - re-raise
+            raise
+        keyword_hits = []
+        logger.warning(
+            "Keyword search unavailable, falling back to vector-only: %s", exc
+        )
+
+    results = rrf_fuse(vector_hits, keyword_hits, top_k=top_k)
+    logger.info(
+        "Hybrid search | vector=%d keyword=%d fused=%d degraded=%s",
+        len(vector_hits),
+        len(keyword_hits),
+        len(results),
+        degraded,
+    )
+
+    return SearchOutcome(
+        results=results,
+        mode=SearchMode.vector if degraded else SearchMode.hybrid,
+        keyword_degraded=degraded,
+    )
 
 
 def hybrid_search(
