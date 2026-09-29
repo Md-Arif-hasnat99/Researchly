@@ -170,7 +170,9 @@ class TestCallSitesRetry:
             def __init__(self, api_key=None):
                 self.models = _Models()
 
-        monkeypatch.setattr(gemini_module, "genai", SimpleNamespace(Client=_Client))
+        mock_client = _Client()
+        monkeypatch.setattr(gemini_module, "genai", SimpleNamespace(Client=lambda **kw: mock_client))
+        monkeypatch.setattr(gemini_module, "_get_gemini_client", lambda: mock_client)
         monkeypatch.setattr(gemini_module, "get_settings", lambda: SimpleNamespace(
             GEMINI_API_KEY="test-key",
             GEMINI_GENERATION_MODEL="test-model",
@@ -221,7 +223,9 @@ class TestCallSitesRetry:
             def __init__(self, api_key=None):
                 self.models = _Models()
 
-        monkeypatch.setattr(gemini_module, "genai", SimpleNamespace(Client=_Client))
+        mock_client = _Client()
+        monkeypatch.setattr(gemini_module, "genai", SimpleNamespace(Client=lambda **kw: mock_client))
+        monkeypatch.setattr(gemini_module, "_get_gemini_client", lambda: mock_client)
         monkeypatch.setattr(gemini_module, "get_settings", lambda: SimpleNamespace(
             GEMINI_API_KEY="test-key",
             GEMINI_GENERATION_MODEL="test-model",
@@ -268,7 +272,9 @@ class TestCallSitesRetry:
             def __init__(self, api_key=None):
                 self.models = _Models()
 
-        monkeypatch.setattr(gemini_module, "genai", SimpleNamespace(Client=_Client))
+        mock_client = _Client()
+        monkeypatch.setattr(gemini_module, "genai", SimpleNamespace(Client=lambda **kw: mock_client))
+        monkeypatch.setattr(gemini_module, "_get_gemini_client", lambda: mock_client)
         monkeypatch.setattr(gemini_module, "get_settings", lambda: SimpleNamespace(
             GEMINI_API_KEY="test-key",
             GEMINI_GENERATION_MODEL="test-model",
