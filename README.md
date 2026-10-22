@@ -155,10 +155,7 @@ researchly/
 │       ├── src/index.ts
 │       └── package.json
 │
-├── docs/
-│   ├── PRD.md                        # Product Requirements Document
-│   ├── design.md                     # Design system specification
-│   └── architecture.md               # System architecture deep-dive
+├── docs/                             # Documentation (PRD, design, architecture)
 │
 ├── supabase/
 │   ├── config.toml                   # Supabase local config
