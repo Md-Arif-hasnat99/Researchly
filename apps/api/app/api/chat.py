@@ -43,6 +43,7 @@ from app.schemas.search import SearchResultChunk
 
 router = APIRouter(tags=["Chat"])
 
+
 # ---------------------------------------------------------------------------
 # Request / response schemas (chat-specific, lives here to stay co-located)
 # ---------------------------------------------------------------------------
@@ -127,20 +128,14 @@ def _get_or_create_conversation(
     client = get_supabase_client()
 
     if conversation_id is not None:
-        try:
-            result = (
-                client.table("conversations")
-                .select("id")
-                .eq("id", str(conversation_id))
-                .eq("user_id", user_id)
-                .single()
-                .execute()
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Conversation not found.",
-            )
+        result = (
+            client.table("conversations")
+            .select("id")
+            .eq("id", str(conversation_id))
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
         if not result.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -149,7 +144,7 @@ def _get_or_create_conversation(
         return str(result.data["id"])
 
     # Create a new conversation — title from first 80 chars of query
-    title = query[:80].strip() or "New Conversation"
+    title = _truncate_text(query, 80) or "New Conversation"
     result = (
         client.table("conversations")
         .insert({"user_id": user_id, "title": title})
@@ -161,6 +156,18 @@ def _get_or_create_conversation(
             detail="Failed to create conversation.",
         )
     return str(result.data[0]["id"])
+
+
+def _truncate_text(text: str, max_length: int) -> str:
+    """Truncate text to max_length, preserving word boundaries and unicode."""
+    if len(text) <= max_length:
+        return text.strip()
+    truncated = text[:max_length]
+    # Find last space to avoid cutting mid-word
+    last_space = truncated.rfind(" ")
+    if last_space > max_length * 0.5:  # Only truncate at word boundary if reasonable
+        truncated = truncated[:last_space]
+    return truncated.strip() + "…"
 
 
 def _persist_message(conversation_id: str, role: str, content: str) -> str:
@@ -203,15 +210,16 @@ def _persist_citations(
         }
         for chunk in cited_chunks
     ]
-    client.table("citations").insert(rows).execute()
+    result = client.table("citations").insert(rows).execute()
+    if not result.data:
+        logger.error("Failed to persist citations for message %s", message_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist citations.",
+        )
 
 
-# ---------------------------------------------------------------------------
-# POST /api/chat
-# ---------------------------------------------------------------------------
-
-
-def _to_citations(chunks) -> list[ChatCitation]:
+def _to_citations(chunks: list[SearchResultChunk]) -> list[ChatCitation]:
     """Map retrieved chunks onto the API's citation shape."""
     return [
         ChatCitation(
@@ -261,9 +269,47 @@ def _raise_retrieval_failure(exc: Exception) -> None:
     ) from exc
 
 
+def _validate_paper_ownership(
+    paper_ids: list[uuid.UUID] | None,
+    user_id: str,
+) -> list[uuid.UUID] | None:
+    """Validate that all paper_ids belong to the user.
+
+    Returns the filtered list of valid paper IDs, or None if no filter was provided.
+    Raises 404 if any provided paper_id doesn't belong to the user.
+    """
+    if not paper_ids:
+        return None
+
+    client = get_supabase_client()
+    result = (
+        client.table("papers")
+        .select("id")
+        .eq("user_id", user_id)
+        .in_("id", [str(p) for p in paper_ids])
+        .execute()
+    )
+
+    found_ids = {uuid.UUID(row["id"]) for row in (result.data or [])}
+    missing = set(paper_ids) - found_ids
+
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Paper(s) not found: {', '.join(str(p) for p in missing)}",
+        )
+
+    return list(found_ids)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/chat
+# ---------------------------------------------------------------------------
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(
-    request: ChatRequest,
+    body: ChatRequest,
     current_user: CurrentUser,
 ) -> ChatResponse:
     """Ask a grounded question using the RAG pipeline.
@@ -278,23 +324,26 @@ def chat(
     """
     user_id = str(current_user.id)
 
+    # Validate paper ownership early
+    validated_paper_ids = _validate_paper_ownership(body.paper_ids, user_id)
+
     # 1. Resolve / create conversation
     conv_id = _get_or_create_conversation(
-        request.conversation_id, user_id, request.query
+        body.conversation_id, user_id, body.query
     )
 
     # 2. Persist user message
-    _persist_message(conv_id, "user", request.query)
+    _persist_message(conv_id, "user", body.query)
 
     # 3. Run RAG pipeline
     try:
         rag_result = run_rag(
-            query=request.query,
+            query=body.query,
             user_id=user_id,
-            top_k=request.top_k,
-            similarity_threshold=request.similarity_threshold,
-            paper_ids=request.paper_ids,
-            rerank=request.rerank,
+            top_k=body.top_k,
+            similarity_threshold=body.similarity_threshold,
+            paper_ids=validated_paper_ids,
+            rerank=body.rerank,
         )
     except Exception as exc:
         _raise_retrieval_failure(exc)
@@ -332,7 +381,7 @@ def _sse(event: str, data: dict) -> bytes:
 
 @router.post("/chat/stream")
 def chat_stream(
-    request: ChatRequest,
+    body: ChatRequest,
     current_user: CurrentUser,
 ) -> StreamingResponse:
     """Ask a question and stream the answer as it is generated.
@@ -360,22 +409,25 @@ def chat_stream(
     """
     user_id = str(current_user.id)
 
+    # Validate paper ownership early
+    validated_paper_ids = _validate_paper_ownership(body.paper_ids, user_id)
+
     # 1. Resolve / create conversation, and persist the user message, both
     #    before the response starts so failures are still HTTP errors.
     conv_id = _get_or_create_conversation(
-        request.conversation_id, user_id, request.query
+        body.conversation_id, user_id, body.query
     )
-    _persist_message(conv_id, "user", request.query)
+    _persist_message(conv_id, "user", body.query)
 
     # 2. Retrieve. Same retrieve/rerank path as the buffered endpoint.
     try:
         context: RetrievedContext = retrieve_context(
-            query=request.query,
+            query=body.query,
             user_id=user_id,
-            top_k=request.top_k,
-            similarity_threshold=request.similarity_threshold,
-            paper_ids=request.paper_ids,
-            rerank=request.rerank,
+            top_k=body.top_k,
+            similarity_threshold=body.similarity_threshold,
+            paper_ids=validated_paper_ids,
+            rerank=body.rerank,
         )
     except Exception as exc:
         _raise_retrieval_failure(exc)
@@ -395,7 +447,7 @@ def chat_stream(
 
         collected: list[str] = []
         try:
-            for text in stream_answer(query=request.query, chunks=context.chunks):
+            for text in stream_answer(query=body.query, chunks=context.chunks):
                 collected.append(text)
                 yield _sse("token", {"text": text})
         except Exception as exc:  # noqa: BLE001
@@ -478,7 +530,7 @@ def list_conversations(current_user: CurrentUser) -> ConversationListResponse:
         .order("updated_at", desc=True)
         .execute()
     )
-    convs = [ConversationResponse(**row) for row in (result.data or [])]
+    convs = [ConversationResponse.model_validate(row) for row in (result.data or [])]
     return ConversationListResponse(conversations=convs, total=len(convs))
 
 
@@ -495,23 +547,19 @@ def get_conversation(
     conversation_id: str,
     current_user: CurrentUser,
 ) -> ConversationDetailResponse:
-    """Return a conversation with its full message history."""
+    """Return a conversation with its full message history and citations."""
     client = get_supabase_client()
+    user_id = str(current_user.id)
 
-    try:
-        conv_result = (
-            client.table("conversations")
-            .select("*")
-            .eq("id", conversation_id)
-            .eq("user_id", str(current_user.id))
-            .single()
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found.",
-        )
+    # Verify ownership and get conversation
+    conv_result = (
+        client.table("conversations")
+        .select("*")
+        .eq("id", conversation_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
 
     if not conv_result.data:
         raise HTTPException(
@@ -522,25 +570,33 @@ def get_conversation(
     # Fetch messages ordered chronologically
     msg_result = (
         client.table("messages")
-        .select("*, citations(*, papers(title), paper_chunks(content))")
+        .select("*")
         .eq("conversation_id", conversation_id)
         .order("created_at")
         .execute()
     )
 
-    # ponytail: manual title mapping to match ChatCitation schema without a new model
     messages = []
     for row in (msg_result.data or []):
-        if row.get("citations"):
-            for c in row["citations"]:
-                c["paper_title"] = c.get("papers", {}).get("title", "Unknown Paper")
-                c["content"] = c.get("paper_chunks", {}).get("content", "")
-        messages.append(MessageResponse(**row))
+        if not isinstance(row, dict):
+            messages.append(MessageResponse.model_validate(row))
+            continue
 
-    return ConversationDetailResponse(
-        **conv_result.data,
-        messages=messages,
-    )
+        # Fetch citations for this message separately
+        citations_result = (
+            client.table("citations")
+            .select("*, papers(title), paper_chunks(content)")
+            .eq("message_id", row["id"])
+            .execute()
+        )
+
+        citation_data = citations_result.data or []
+        row["citations"] = citation_data
+        messages.append(MessageResponse.model_validate(row))
+
+    conv_data = dict(conv_result.data)
+    conv_data["messages"] = messages
+    return ConversationDetailResponse.model_validate(conv_data)
 
 
 # ---------------------------------------------------------------------------
@@ -558,21 +614,16 @@ def delete_conversation(
 ) -> None:
     """Delete a conversation and all its messages/citations (ownership enforced)."""
     client = get_supabase_client()
+    user_id = str(current_user.id)
 
-    try:
-        result = (
-            client.table("conversations")
-            .select("id")
-            .eq("id", conversation_id)
-            .eq("user_id", str(current_user.id))
-            .single()
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found.",
-        )
+    result = (
+        client.table("conversations")
+        .select("id")
+        .eq("id", conversation_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
 
     if not result.data:
         raise HTTPException(

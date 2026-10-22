@@ -196,7 +196,7 @@ class TestChatEndpoint:
         existing_id = str(uuid4())
         stub = mock_db.table.return_value
         stub = stub.select.return_value.eq.return_value.eq.return_value
-        stub.single.return_value.execute.return_value = MagicMock(
+        stub.maybe_single.return_value.execute.return_value = MagicMock(
             data={"id": existing_id}
         )
         mock_db.table.return_value.insert.return_value.execute.side_effect = [
@@ -270,27 +270,38 @@ class TestGetConversation:
         mock_db = MagicMock()
         mock_client_fn.return_value = mock_db
 
-        # First call: conversation lookup
-        # Second call: messages lookup
-        stub = mock_db.table.return_value
-        eq_stub = stub.select.return_value.eq.return_value.eq.return_value
-        eq_stub.single.return_value.execute.return_value = MagicMock(
+        # First call: conversation lookup (conversations table)
+        # Second call: messages lookup (messages table)
+        # Third call: citations lookup (citations table) - called per message
+        conv_stub = mock_db.table.return_value
+        conv_stub = conv_stub.select.return_value.eq.return_value.eq.return_value
+        conv_stub.maybe_single.return_value.execute.return_value = MagicMock(
             data=_conv_row()
         )
-        order_stub = stub.select.return_value.eq.return_value.order.return_value
+
+        msg_stub = mock_db.table.return_value
+        msg_stub = msg_stub.select.return_value.eq.return_value.order.return_value
         assistant_msg = _msg_row(role="assistant", content="A.")
-        assistant_msg["citations"] = [{
-            "chunk_id": CHUNK_ID,
-            "paper_id": PAPER_ID,
-            "papers": {"title": "Test Paper"},
-            "page_number": 1,
-            "similarity_score": 0.99
-        }]
-        order_stub.execute.return_value = MagicMock(
+        assistant_msg["citations"] = []  # Citations fetched separately now
+        msg_stub.execute.return_value = MagicMock(
             data=[
                 _msg_row(role="user", content="Q?"),
                 assistant_msg,
             ]
+        )
+
+        # Citations lookup for the assistant message
+        cite_stub = mock_db.table.return_value
+        cite_stub = cite_stub.select.return_value.eq.return_value
+        cite_stub.execute.return_value = MagicMock(
+            data=[{
+                "chunk_id": CHUNK_ID,
+                "paper_id": PAPER_ID,
+                "page_number": 1,
+                "similarity_score": 0.99,
+                "papers": {"title": "Test Paper"},
+                "paper_chunks": {"content": "Test content"}
+            }]
         )
 
         resp = client.get(f"/api/conversations/{CONV_ID}", headers=AUTH_HEADERS)
@@ -306,7 +317,7 @@ class TestGetConversation:
         mock_client_fn.return_value = mock_db
         stub = mock_db.table.return_value
         stub = stub.select.return_value.eq.return_value.eq.return_value
-        stub.single.return_value.execute.side_effect = Exception("not found")
+        stub.maybe_single.return_value.execute.return_value = MagicMock(data=None)
 
         resp = client.get(f"/api/conversations/{uuid4()}", headers=AUTH_HEADERS)
         assert resp.status_code == 404
@@ -324,7 +335,7 @@ class TestDeleteConversation:
         mock_client_fn.return_value = mock_db
         stub = mock_db.table.return_value
         stub = stub.select.return_value.eq.return_value.eq.return_value
-        stub.single.return_value.execute.return_value = MagicMock(
+        stub.maybe_single.return_value.execute.return_value = MagicMock(
             data={"id": CONV_ID}
         )
 
@@ -338,7 +349,7 @@ class TestDeleteConversation:
         mock_client_fn.return_value = mock_db
         stub = mock_db.table.return_value
         stub = stub.select.return_value.eq.return_value.eq.return_value
-        stub.single.return_value.execute.side_effect = Exception("not found")
+        stub.maybe_single.return_value.execute.return_value = MagicMock(data=None)
 
         resp = client.delete(f"/api/conversations/{uuid4()}", headers=AUTH_HEADERS)
         assert resp.status_code == 404
