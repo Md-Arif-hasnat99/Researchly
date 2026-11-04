@@ -7,6 +7,8 @@ export interface ChatCitation {
   // Null when the source was surfaced without a vector comparison.
   similarity_score: number | null;
   content?: string;
+  papers?: { title?: string };
+  paper_chunks?: { content?: string };
 }
 
 export interface ChatResponse {
