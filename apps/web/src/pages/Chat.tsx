@@ -31,6 +31,9 @@ export const Chat: React.FC = () => {
   const [rerank, setRerank] = useState(true);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Keep track of which conversation is currently loaded so we do not
+  // refetch and overwrite state when navigating to a newly created conversation.
+  const activeConvIdRef = useRef<string | null>(conversationId || null);
 
   useEffect(() => {
     fetchConversations();
@@ -54,8 +57,12 @@ export const Chat: React.FC = () => {
 
   useEffect(() => {
     if (conversationId) {
-      fetchConversationDetail(conversationId);
+      if (conversationId !== activeConvIdRef.current) {
+        activeConvIdRef.current = conversationId;
+        fetchConversationDetail(conversationId);
+      }
     } else {
+      activeConvIdRef.current = null;
       setMessages([]);
     }
   }, [conversationId]);
@@ -78,7 +85,25 @@ export const Chat: React.FC = () => {
     try {
       setIsLoading(true);
       const data = await getConversation(id);
-      setMessages(data.messages as ChatMessage[]);
+      if (data && Array.isArray(data.messages)) {
+        // Normalize citations from server rows (which join papers and paper_chunks)
+        const normalizedMessages: ChatMessage[] = data.messages.map((m) => {
+          const rawCitations = (m as { citations?: Array<ChatCitation & { papers?: { title?: string }; paper_chunks?: { content?: string } }> }).citations;
+          return {
+            ...m,
+            citations: rawCitations
+              ? rawCitations.map((c) => ({
+                  ...c,
+                  paper_title: c.paper_title || c.papers?.title || 'Unknown Paper',
+                  content: c.content || c.paper_chunks?.content || '',
+                }))
+              : undefined,
+          };
+        });
+        setMessages(normalizedMessages);
+      } else {
+        setMessages([]);
+      }
     } catch (err) {
       console.error('Failed to fetch conversation:', err);
       navigate('/chat');
@@ -87,12 +112,24 @@ export const Chat: React.FC = () => {
     }
   };
 
+  const handleNewChat = () => {
+    setMessages([]);
+    setInput('');
+    setScopedPaperIds([]);
+    activeConvIdRef.current = null;
+    if (conversationId) {
+      navigate('/chat');
+    }
+  };
+
   const handleDeleteConversation = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     try {
       await deleteConversation(id);
-      setConversations(conversations.filter((c) => c.id !== id));
+      setConversations((prev) => prev.filter((c) => c.id !== id));
       if (conversationId === id) {
+        activeConvIdRef.current = null;
+        setMessages([]);
         navigate('/chat');
       }
     } catch (err) {
@@ -153,36 +190,37 @@ export const Chat: React.FC = () => {
         },
       });
 
-      if (!conversationId) {
+      const newConvId = res.conversation_id || conversationId;
+      if (newConvId) {
+        activeConvIdRef.current = newConvId;
+      }
+
+      if (!conversationId && res.conversation_id) {
         // If it was a new conversation, navigate to the new URL
-        // We'll also refresh the conversation list to show it
+        // and refresh the conversation list to show it
         fetchConversations();
         navigate(`/chat/${res.conversation_id}`, { replace: true });
       }
 
-      // Replace the streaming placeholder with the persisted message.
+      // Replace the streaming placeholder with the persisted message and update conversation ID
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === tempAssistantId
-            ? {
-                ...m,
-                id: res.message_id,
-                conversation_id: res.conversation_id,
-                content: res.answer || answerSoFar,
-                citations: res.citations,
-                reranked: res.reranked,
-              }
-            : m,
-        ),
+        prev.map((m) => {
+          if (m.id === tempAssistantId) {
+            return {
+              ...m,
+              id: res.message_id || m.id,
+              conversation_id: newConvId || m.conversation_id,
+              content: res.answer || answerSoFar,
+              citations: res.citations ?? m.citations,
+              reranked: res.reranked,
+            };
+          }
+          if (!conversationId && newConvId) {
+            return { ...m, conversation_id: newConvId };
+          }
+          return m;
+        }),
       );
-
-      if (!conversationId) {
-        // The optimistic messages were created before the conversation
-        // existed, so their conversation_id is still a placeholder.
-        setMessages((prev) =>
-          prev.map((m) => ({ ...m, conversation_id: res.conversation_id })),
-        );
-      }
     } catch (err) {
       console.error('Failed to ask question:', err);
       // Keep the placeholder and show the reason in it: the request may
@@ -210,7 +248,7 @@ export const Chat: React.FC = () => {
           <Button 
             variant="primary" 
             className="w-full flex items-center justify-center gap-2"
-            onClick={() => navigate('/chat')}
+            onClick={handleNewChat}
           >
             <Plus className="w-4 h-4" />
             New Chat
@@ -278,62 +316,85 @@ export const Chat: React.FC = () => {
             </div>
           )}
 
-          {messages.map((m) => (
-            <div
-              key={m.id}
-              className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}
-            >
+          {messages.map((m) => {
+            // Do not render empty assistant bubble before tokens/citations arrive while loading
+            if (m.role === 'assistant' && !m.content && (!m.citations || m.citations.length === 0)) {
+              return null;
+            }
+
+            return (
               <div
-                className={`max-w-3xl rounded-xl p-4 text-sm leading-relaxed ${
-                  m.role === 'user'
-                    ? 'bg-accent text-white whitespace-pre-wrap'
-                    : 'bg-background border border-border text-text-primary'
-                }`}
+                key={m.id}
+                className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}
               >
-                {m.role === 'user' ? m.content : <MarkdownContent>{m.content}</MarkdownContent>}
-              </div>
-
-              {m.reranked && (
-                <div
-                  className="flex items-center gap-1.5 mt-1.5 text-[11px] text-text-muted"
-                  data-testid="message-reranked"
-                >
-                  <Sparkles className="w-3 h-3" />
-                  <span>Sources re-ranked by relevance</span>
-                </div>
-              )}
-
-              {/* Citations section if assistant and citations exist */}
-              {m.citations && m.citations.length > 0 && (
-                <div className="mt-2.5 space-y-1.5 max-w-2xl w-full">
-                  <div className="text-[11px] font-semibold text-text-muted uppercase tracking-wider">
-                    Source Evidence
+                {m.content && (
+                  <div
+                    className={`max-w-3xl rounded-xl p-4 text-sm leading-relaxed ${
+                      m.role === 'user'
+                        ? 'bg-accent text-white whitespace-pre-wrap'
+                        : 'bg-background border border-border text-text-primary'
+                    }`}
+                  >
+                    {m.role === 'user' ? m.content : <MarkdownContent>{m.content}</MarkdownContent>}
                   </div>
-                  {m.citations.map((c, idx) => (
-                    <details
-                      key={c.chunk_id + idx}
-                      className="bg-neutral-50 border border-border rounded-lg p-2.5 text-xs text-text-secondary group"
-                    >
-                      <summary className="flex items-center justify-between gap-3 cursor-pointer hover:text-accent transition-colors list-none marker:hidden [&::-webkit-details-marker]:hidden">
-                        <div className="font-medium text-text-primary flex items-center gap-1.5">
-                          <FileText className="w-3.5 h-3.5 text-accent" />
-                          <span>{c.paper_title} · Page {c.page_number}</span>
-                        </div>
-                        <div className="text-[10px] font-mono text-text-muted opacity-60">
-                          {c.similarity_score ? (c.similarity_score * 100).toFixed(1) + '%' : 'Source'}
-                        </div>
-                      </summary>
-                      {c.content && (
-                        <div className="mt-2 p-2 bg-white border border-border rounded text-text-primary whitespace-pre-wrap leading-relaxed border-l-2 border-l-accent opacity-90">
-                          {c.content}
-                        </div>
-                      )}
-                    </details>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+
+                {m.reranked && (
+                  <div
+                    className="flex items-center gap-1.5 mt-1.5 text-[11px] text-text-muted"
+                    data-testid="message-reranked"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>Sources re-ranked by relevance</span>
+                  </div>
+                )}
+
+                {/* Citations section if assistant and citations exist */}
+                {m.citations && m.citations.length > 0 && (
+                  <div className="mt-2.5 space-y-1.5 max-w-2xl w-full">
+                    <div className="text-[11px] font-semibold text-text-muted uppercase tracking-wider">
+                      Source Evidence
+                    </div>
+                    {m.citations.map((c, idx) => {
+                      const paperTitle = c.paper_title || c.papers?.title || 'Unknown Paper';
+                      const citationContent = c.content || c.paper_chunks?.content;
+                      const scoreText =
+                        c.similarity_score !== null && c.similarity_score !== undefined
+                          ? `${(c.similarity_score * 100).toFixed(1)}%`
+                          : 'Source';
+
+                      return (
+                        <details
+                          key={`${c.chunk_id || 'chunk'}-${idx}`}
+                          className="bg-neutral-50 border border-border rounded-lg p-2.5 text-xs text-text-secondary group"
+                        >
+                          <summary className="flex items-center justify-between gap-3 cursor-pointer hover:text-accent transition-colors list-none marker:hidden [&::-webkit-details-marker]:hidden">
+                            <div className="font-medium text-text-primary flex items-center gap-1.5">
+                              <FileText className="w-3.5 h-3.5 text-accent" />
+                              <span>
+                                {paperTitle}
+                                {c.page_number !== undefined && c.page_number !== null
+                                  ? ` · Page ${c.page_number}`
+                                  : ''}
+                              </span>
+                            </div>
+                            <div className="text-[10px] font-mono text-text-muted opacity-60">
+                              {scoreText}
+                            </div>
+                          </summary>
+                          {citationContent && (
+                            <div className="mt-2 p-2 bg-white border border-border rounded text-text-primary whitespace-pre-wrap leading-relaxed border-l-2 border-l-accent opacity-90">
+                              {citationContent}
+                            </div>
+                          )}
+                        </details>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
           {isLoading && (
             <div className="flex items-start">
